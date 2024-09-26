@@ -40,14 +40,10 @@ def cat_many(
 
 #class UnicertaintyAwareLoss(nn.Module):
 class RegressionModel(pl.LightningModule):
-
-
     log_scatter_plot: bool = False
     log_test_predictions: bool = False
 
-
-
-    def __init__(self, config: Config, weight_pki=1, weight_pose=1):
+    def __init__(self, config: Config, weight_pki=1, weight_pose=10):
         super(RegressionModel, self).__init__() #do I need this?
 
         self.config = config
@@ -124,7 +120,7 @@ class RegressionModel(pl.LightningModule):
         # Forward pass for pose batch
         pred_pose = self.forward(pose_batch)
         loss_pose = self.pose_mse(pred_pose, pose_batch)
-        self.log("train/loss_pose", pose_mse, batch_size=pred_pose.size(0), on_epoch=True)
+        self.log("train/loss_pose", loss_pose, batch_size=pred_pose.size(0), on_epoch=True)
 
         # Combine losses
         total_loss = self.weight_pki * loss_activity + self.weight_pose * loss_pose
@@ -160,15 +156,13 @@ class RegressionModel(pl.LightningModule):
 
         return {
             "pred": torch.cat([pred_activity[:, 1], pred_pose[:, 1]]),  # Concatenate activity and pose predictions
-            "target": torch.cat([activity_batch.y, target_rmsd]),  # Concatenate activity and pose targets
+            "target": torch.cat([activity_batch.y, pose_batch.predicted_rmsd]),  # Concatenate activity and pose targets
             f"{key}/mae": combined_mae
             }
 
     
     
     def process_eval_outputs(self, outputs) -> float:
-        print('printing outputs')
-        print(outputs)
         pred = torch.cat([output["pred"] for output in outputs], 0)
         target = torch.cat([output["target"] for output in outputs], 0)
         corr = ((pred - pred.mean()) * (target - target.mean())).mean() / (

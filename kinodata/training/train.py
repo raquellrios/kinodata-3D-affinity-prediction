@@ -46,7 +46,7 @@ import wandb
 wandb.init(project='extended_kinodata')
 
 #%%
-torch.cuda.is_available()
+# torch.cuda.is_available()
 
 #%%
 
@@ -56,7 +56,7 @@ data_module = make_kinodata_module(
 
             batch_size=32,
             split_type="scaffold-k-fold",
-            filter_rmsd_max_value=4.0,
+            filter_rmsd_max_value=2.0,
             split_index=0,
         )
     ),
