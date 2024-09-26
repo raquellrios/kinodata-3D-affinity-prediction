@@ -212,7 +212,7 @@ class ComplexTransformer(RegressionModel):
                     FF(hidden_channels, hidden_channels, self.act)
                     for _ in range(decoder_hidden_layers)
                 ]
-                + [Linear(hidden_channels, 3)]# Change the output dimension to 3
+                + [Linear(hidden_channels, 2)]# Change the output dimension to 3
             
             )
         )
@@ -252,10 +252,10 @@ class ComplexTransformer(RegressionModel):
 
         #output[:, 2] = torch.nn.functional.softplus(output[:, 2])
         # # Create a new tensor for the modified third column
-        new_third_col = torch.nn.functional.softplus(output[:, 2])
+        # new_third_col = torch.nn.functional.softplus(output[:, 2])
 
         # Concatenate the new third column with the rest of the output
-        output = torch.cat((output[:, :2], new_third_col.unsqueeze(1), output[:, 3:]), dim=1)
+        # output = torch.cat((output[:, :2], new_third_col.unsqueeze(1), output[:, 3:]), dim=1)
         #ensuring the third prediciton is always positive and greater than 0, so that it can then be put through the sigmoid function--> check with jonh!
         #I thoguht about just using a sigmoid above, but then it would sometimes predict values that are 0 and this would be an issue in the loss computation
         return output
