@@ -1,15 +1,3 @@
-# %%
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import (
-    ModelCheckpoint,
-    LearningRateMonitor,
-    EarlyStopping,
-)
-from pytorch_lightning.loggers.wandb import WandbLogger
-
-from kinodata.data.data_module import make_kinodata_module
-
-
 import json
 from pathlib import Path
 from typing import Any
@@ -22,60 +10,29 @@ sys.path.append("..")
 
 
 import torch
+from torch.utils.data import Dataset, DataLoader
+from torch_geometric.data import Batch
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import (
+    ModelCheckpoint,
+    LearningRateMonitor,
+    EarlyStopping,
+)
+from pytorch_lightning.loggers.wandb import WandbLogger
+
+import wandb
 
 import kinodata.configuration as cfg
 from kinodata.model import ComplexTransformer, DTIModel, RegressionModel
 from kinodata.model.complex_transformer import make_model as make_complex_transformer
 from kinodata.data.data_module import make_kinodata_module
 from kinodata.transform import TransformToComplexGraph
-
 import kinodata.configuration as configuration
-
-# from kinodata.training import train
 from kinodata.model.complex_transformer import ComplexTransformer, make_model
 from kinodata.types import NodeType
 from kinodata.data.dataset import apply_transform_instance_permament
 from kinodata.transform.to_complex_graph import TransformToComplexGraph
-
-
-# %%
-# Log in to your W&B account
-
-import wandb
-
-# wandb.login() #pass key and host?
-wandb.init(project="extended_kinodata")
-
-# %%
-# torch.cuda.is_available()
-
-# %%
-
-data_module = make_kinodata_module(
-    cfg.get("data", "training").update(
-        dict(
-            batch_size=32,
-            split_type="scaffold-k-fold",
-            filter_rmsd_max_value=2.0,
-            split_index=0,
-        )
-    ),
-    transforms=[TransformToComplexGraph(remove_heterogeneous_representation=False)],
-)
-
-
-# %%
-data_module[1]
-
-
-# %%
-
-# trying to treat everything as a large dataset
-
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torch_geometric.data import Batch
-import pytorch_lightning as pl
+from kinodata.data.data_module import make_kinodata_module
 
 
 class CombinedDataset(Dataset):
@@ -179,27 +136,19 @@ class CombinedDataModule(pl.LightningDataModule):
         )
 
 
-combined_data_module = CombinedDataModule(data_module[0], data_module[1], batch_size=16)
-
 
 def train(config, fn_data, fn_model=None):
     logger = WandbLogger(project="kinodata_extended", log_model="all")
     model = fn_model(config)
     data_module = fn_data
 
-    print(data_module)
-    # fn_data(config)
-    # data_module=data_module
     validation_checkpoint = ModelCheckpoint(
         monitor="val/mae",
-        # monitor="train/loss_activity",
         mode="min",
     )
-    # print(data_module)
     lr_monitor = LearningRateMonitor("epoch")
     early_stopping = EarlyStopping(
         monitor="val/mae",
-        # monitor="train/loss_activity",
         patience=config.early_stopping_patience,
         mode="min",
     )
@@ -218,69 +167,58 @@ def train(config, fn_data, fn_model=None):
         exit()
 
     trainer.fit(model, datamodule=data_module)
-    # trainer.test(ckpt_path="best", datamodule=data_module)
 
 
-configuration.register(
-    "sparse_transformer",
-    max_num_neighbors=16,
-    hidden_channels=256,
-    num_attention_blocks=3,
-    num_heads=8,
-    act="silu",
-    edge_attr_size=4,
-    ln1=True,
-    ln2=True,
-    ln3=True,
-    graph_norm=False,
-    interaction_modes=["covalent", "structural"],
-    # optim='adam',
-)
+def main():
+    wandb.init(project="extended_kinodata")
+
+    data_module = make_kinodata_module(
+        cfg.get("data", "training").update(
+            dict(
+                batch_size=32,
+                split_type="scaffold-k-fold",
+                filter_rmsd_max_value=2.0,
+                split_index=0,
+            )
+        ),
+        transforms=[TransformToComplexGraph(remove_heterogeneous_representation=False)],
+    )
 
 
-config = configuration.get("data", "training", "sparse_transformer")
-# print(config)
+    combined_data_module = CombinedDataModule(data_module[0], data_module[1], batch_size=16)
 
-config = config.update_from_file()
-
-# config = config.update_from_args()
-
-
-config["need_distances"] = False
-
-
-config["perturb_ligand_positions"] = 0.0
-config["perturb_pocket_positions"] = 0.0
-config["perturb_complex_positions"] = 0.1
-
-
-config["node_types"] = [NodeType.Complex]
-
-
-# config.register(optimizer="adam")
-
-# %%
-import torch
-
-torch.cuda.empty_cache()
-print(torch.cuda.memory_summary())
-
-# %%
-train(
-    config,
-    fn_model=make_model,
-    fn_data=combined_data_module,
-    # partial(
-    # make_kinodata_module,
-    # data_module,
-    # one_time_transform=partial(
-    #    apply_transform_instance_permament,
-    #    transform=TransformToComplexGraph(
-    #        remove_heterogeneous_representation=True
-    #    ),
-    # ),
-    # ),
-)
+    configuration.register(
+        "sparse_transformer",
+        max_num_neighbors=16,
+        hidden_channels=256,
+        num_attention_blocks=3,
+        num_heads=8,
+        act="silu",
+        edge_attr_size=4,
+        ln1=True,
+        ln2=True,
+        ln3=True,
+        graph_norm=False,
+        interaction_modes=["covalent", "structural"],
+        # optim='adam',
+    )
 
 
-# %%
+    config = configuration.get("data", "training", "sparse_transformer")
+    config = config.update_from_file()
+    config["need_distances"] = False
+    config["perturb_ligand_positions"] = 0.0
+    config["perturb_pocket_positions"] = 0.0
+    config["perturb_complex_positions"] = 0.1
+    config["node_types"] = [NodeType.Complex]
+
+
+    train(
+        config,
+        fn_model=make_model,
+        fn_data=combined_data_module,
+    )
+
+
+if __name__ == "__main__":
+    main()
