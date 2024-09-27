@@ -50,14 +50,11 @@ class InteractionModule(Module):
     def out(self, edge_repr: Tensor) -> Tensor:
         return self.act(edge_repr + self.bias)
 
-    def interactions(self, data: HeteroData) -> Tuple[Tensor, OptTensor, OptTensor]:
-        ...
+    def interactions(self, data: HeteroData) -> Tuple[Tensor, OptTensor, OptTensor]: ...
 
-    def process_attr(self, edge_attr: Tensor) -> Tensor:
-        ...
+    def process_attr(self, edge_attr: Tensor) -> Tensor: ...
 
-    def process_weight(self, edge_weight: Tensor) -> Tensor:
-        ...
+    def process_weight(self, edge_weight: Tensor) -> Tensor: ...
 
     def forward(self, data: HeteroData) -> Tuple[Tensor, Tensor]:
         edge_index, edge_attr, edge_weight = self.interactions(data)
@@ -146,8 +143,8 @@ class ComplexTransformer(RegressionModel):
         config: Config,
         hidden_channels: int,
         num_heads: int,
-        num_attention_blocks: int, #.3
-        interaction_radius: float, #1
+        num_attention_blocks: int,  # .3
+        interaction_radius: float,  # 1
         max_num_neighbors: int,
         act: str,
         max_atomic_number: int = 100,
@@ -213,7 +210,6 @@ class ComplexTransformer(RegressionModel):
                     for _ in range(decoder_hidden_layers)
                 ]
                 + [Linear(hidden_channels, 1)]
-            
             )
         )
         self.activity_readout = Sequential(
@@ -224,12 +220,11 @@ class ComplexTransformer(RegressionModel):
                     for _ in range(decoder_hidden_layers)
                 ]
                 + [Linear(hidden_channels, 1)]
-            
             )
         )
 
     def forward(self, data: HeteroData) -> NodeEmbedding:
-        #nose_store_test=data[0][NodeType.Complex]
+        # nose_store_test=data[0][NodeType.Complex]
         node_store = data[NodeType.Complex]
 
         node_repr = self.act(

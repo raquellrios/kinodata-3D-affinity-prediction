@@ -38,33 +38,32 @@ def cat_many(
     }
 
 
-#class UnicertaintyAwareLoss(nn.Module):
+# class UnicertaintyAwareLoss(nn.Module):
 class RegressionModel(pl.LightningModule):
     log_scatter_plot: bool = False
     log_test_predictions: bool = False
 
     def __init__(self, config: Config, weight_pki=1, weight_pose=1):
-        super(RegressionModel, self).__init__() #do I need this?
+        super(RegressionModel, self).__init__()  # do I need this?
 
         self.config = config
         self.save_hyperparameters(config)  # triggers wandb hook
         self.define_metrics()
-        #self.set_criterion()
-        #self.loss_pki=loss_pki #do I need this?
-        #self.loss_pose=loss_pose #do I need this?
+        # self.set_criterion()
+        # self.loss_pki=loss_pki #do I need this?
+        # self.loss_pose=loss_pose #do I need this?
         self.weight_pki = weight_pki
         self.weight_pose = weight_pose
 
     def define_metrics(self):
-        #wandb.init(project="kinodata_extended", config=self.config)
-        #print('rpintint setting from insde regression')
-        #print(wandb.run.settings)
+        # wandb.init(project="kinodata_extended", config=self.config)
+        # print('rpintint setting from insde regression')
+        # print(wandb.run.settings)
         wandb.init()
         wandb.define_metric("val/pose_mae", summary="min")
         wandb.define_metric("val/activity_mae", summary="min")
         wandb.define_metric("val/mae", summary="min")
         wandb.define_metric("val/corr", summary="max")
-
 
     def configure_optimizers(self):
         Opt = resolve_optim(self.hparams.optim)
@@ -86,54 +85,66 @@ class RegressionModel(pl.LightningModule):
             {
                 "scheduler": scheduler,
                 "monitor": "val/mae",
-                #"monitor": "train/loss_activity",
+                # "monitor": "train/loss_activity",
                 "interval": "epoch",
                 "frequency": 1,
             }
         ]
-    
+
     def forward(self, batch) -> Tensor:
         return self.model(batch)
-   
+
     def activity_mae(self, pred, batch):
-        return (batch.y - pred[:,1]).abs().mean()
-    
+        return (batch.y - pred[:, 1]).abs().mean()
+
     def activity_mse(self, pred, batch):
-        return (batch.y - pred[:,1]).pow(2).mean()
+        return (batch.y - pred[:, 1]).pow(2).mean()
 
     def pose_mae(self, pred, batch):
-        return (batch.predicted_rmsd - pred[:,0]).abs().mean()
+        return (batch.predicted_rmsd - pred[:, 0]).abs().mean()
 
     def pose_mse(self, pred, batch):
-        return (batch.predicted_rmsd - pred[:,0]).pow(2).mean()
+        return (batch.predicted_rmsd - pred[:, 0]).pow(2).mean()
 
-
-    def training_step(self, batch, *args) -> Tensor:    #for loop over the bacthes 
+    def training_step(self, batch, *args) -> Tensor:  # for loop over the bacthes
         # Unpack the activity and pose batches directly
         activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
-       
+
         # Forward pass for activity batch
         pred_activity = self.forward(activity_batch)
         loss_activity = self.activity_mse(pred_activity, activity_batch)
-        self.log("train/loss_activity", loss_activity, batch_size=pred_activity.size(0), on_epoch=True)
-    
+        self.log(
+            "train/loss_activity",
+            loss_activity,
+            batch_size=pred_activity.size(0),
+            on_epoch=True,
+        )
+
         # Forward pass for pose batch
         pred_pose = self.forward(pose_batch)
         loss_pose = self.pose_mse(pred_pose, pose_batch)
-        self.log("train/loss_pose", loss_pose, batch_size=pred_pose.size(0), on_epoch=True)
+        self.log(
+            "train/loss_pose", loss_pose, batch_size=pred_pose.size(0), on_epoch=True
+        )
 
         # Combine losses
         total_loss = self.weight_pki * loss_activity + self.weight_pose * loss_pose
-        self.log("train/total_loss", total_loss, batch_size=pred_activity.size(0), on_epoch=True)
+        self.log(
+            "train/total_loss",
+            total_loss,
+            batch_size=pred_activity.size(0),
+            on_epoch=True,
+        )
 
-        wandb.log({
-            "train/total_loss": total_loss,
-             "batch_size": pred_activity.size(0), #check this is right
-             "on_epoch": True
-            })
+        wandb.log(
+            {
+                "train/total_loss": total_loss,
+                "batch_size": pred_activity.size(0),  # check this is right
+                "on_epoch": True,
+            }
+        )
         return total_loss
 
-        
     def validation_step(self, batch, *args, key: str = "val"):
         # Unpack the activity and pose batches directly
         activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
@@ -141,27 +152,43 @@ class RegressionModel(pl.LightningModule):
         # Forward pass for activity batch
         pred_activity = self.forward(activity_batch)
         activity_mae = self.activity_mae(pred_activity, activity_batch)
-        self.log(f"{key}/activity_mae", activity_mae, batch_size=pred_activity.size(0), on_epoch=True)
-    
+        self.log(
+            f"{key}/activity_mae",
+            activity_mae,
+            batch_size=pred_activity.size(0),
+            on_epoch=True,
+        )
+
         # Forward pass for pose batch
         pred_pose = self.forward(pose_batch)
-        target_exp_rmsd = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
+        target_exp_rmsd = (
+            pose_batch.predicted_rmsd
+        )  # Assuming pose_batch has predicted_rmsd as a target
         pose_mae = self.pose_mae(pred_pose, pose_batch)
-        self.log(f"{key}/pose_mae", pose_mae, batch_size=pred_pose.size(0), on_epoch=True)
+        self.log(
+            f"{key}/pose_mae", pose_mae, batch_size=pred_pose.size(0), on_epoch=True
+        )
 
         # Combined MAE of activity and pose
         combined_mae = (activity_mae + pose_mae) / 2
-    
-        self.log(f"{key}/mae", combined_mae, batch_size=max(pred_activity.size(0), pred_pose.size(0)), on_epoch=True)
+
+        self.log(
+            f"{key}/mae",
+            combined_mae,
+            batch_size=max(pred_activity.size(0), pred_pose.size(0)),
+            on_epoch=True,
+        )
 
         return {
-            "pred": torch.cat([pred_activity[:, 1], pred_pose[:, 0]]),  # Concatenate activity and pose predictions
-            "target": torch.cat([activity_batch.y, pose_batch.predicted_rmsd]),  # Concatenate activity and pose targets
-            f"{key}/mae": combined_mae
-            }
+            "pred": torch.cat(
+                [pred_activity[:, 1], pred_pose[:, 0]]
+            ),  # Concatenate activity and pose predictions
+            "target": torch.cat(
+                [activity_batch.y, pose_batch.predicted_rmsd]
+            ),  # Concatenate activity and pose targets
+            f"{key}/mae": combined_mae,
+        }
 
-    
-    
     def process_eval_outputs(self, outputs) -> float:
         pred = torch.cat([output["pred"] for output in outputs], 0)
         target = torch.cat([output["target"] for output in outputs], 0)
@@ -170,7 +197,6 @@ class RegressionModel(pl.LightningModule):
         ).cpu().item()
         mae = (pred - target).abs().mean()
         return pred, target, corr, mae
-    
 
     def validation_epoch_end(self, outputs, *args, **kwargs) -> None:
         super().validation_epoch_end(outputs)
@@ -190,27 +216,23 @@ class RegressionModel(pl.LightningModule):
             wandb.log({"scatter_val": wandb.Image(fig)})
             plt.close(fig)
 
-
     def predict_step(self, batch, *args):
-        #pred = self.forward(batch,3).flatten()
-        print('I am in the predict_step')
+        # pred = self.forward(batch,3).flatten()
+        print("I am in the predict_step")
         from torch_geometric.data import Batch
 
-        
-        #I think there is an inconsistency here with the batch
-        batch=Batch.from_data_list(batch)
+        # I think there is an inconsistency here with the batch
+        batch = Batch.from_data_list(batch)
         pred = self.forward(batch)
         pred_activity = pred[:, 1]
         pred_unc_activity = pred[:, 0]
         # pose_certainty = pred[:, 2]
 
-
-        #need to change this to do it properly 28/06
+        # need to change this to do it properly 28/06
         return {"pred activity": pred_activity, "target": batch.y.flatten()}
-    
 
     def test_step(self, batch, *args, **kwargs):
-        print('i am in the test_step')
+        print("i am in the test_step")
         info = self.validation_step(batch, key="test")
         return info
 
