@@ -109,6 +109,7 @@ class RegressionModel(pl.LightningModule):
     def training_step(self, batch, *args) -> Tensor:  # for loop over the bacthes
         # Unpack the activity and pose batches directly
         activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
+        n_act, n_pose = activity_batch.size(0), pose_batch.size(0)
 
         # Forward pass for activity batch
         pred_activity = self.forward(activity_batch)
@@ -116,7 +117,7 @@ class RegressionModel(pl.LightningModule):
         self.log(
             "train/loss_activity",
             loss_activity,
-            batch_size=pred_activity.size(0),
+            batch_size=n_act,
             on_epoch=True,
         )
 
@@ -124,22 +125,22 @@ class RegressionModel(pl.LightningModule):
         pred_pose = self.forward(pose_batch)
         loss_pose = self.pose_mse(pred_pose, pose_batch)
         self.log(
-            "train/loss_pose", loss_pose, batch_size=pred_pose.size(0), on_epoch=True
+            "train/loss_pose", loss_pose, batch_size=n_pose, on_epoch=True
         )
 
         # Combine losses
-        total_loss = self.weight_pki * loss_activity + self.weight_pose * loss_pose
+        total_loss = (self.weight_pki * loss_activity * n_act + self.weight_pose * loss_pose * n_pose) / (n_pose + n_act)
         self.log(
             "train/total_loss",
             total_loss,
-            batch_size=pred_activity.size(0),
+            batch_size=n_act + n_pose,
             on_epoch=True,
         )
 
         wandb.log(
             {
                 "train/total_loss": total_loss,
-                "batch_size": pred_activity.size(0),  # check this is right
+                "batch_size": n_pose + n_act,
                 "on_epoch": True,
             }
         )
@@ -148,6 +149,7 @@ class RegressionModel(pl.LightningModule):
     def validation_step(self, batch, *args, key: str = "val"):
         # Unpack the activity and pose batches directly
         activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
+        n_act, n_pose = activity_batch.size(0), pose_batch.size(0)
 
         # Forward pass for activity batch
         pred_activity = self.forward(activity_batch)
@@ -155,7 +157,7 @@ class RegressionModel(pl.LightningModule):
         self.log(
             f"{key}/activity_mae",
             activity_mae,
-            batch_size=pred_activity.size(0),
+            batch_size=n_act,
             on_epoch=True,
         )
 
@@ -166,16 +168,16 @@ class RegressionModel(pl.LightningModule):
         )  # Assuming pose_batch has predicted_rmsd as a target
         pose_mae = self.pose_mae(pred_pose, pose_batch)
         self.log(
-            f"{key}/pose_mae", pose_mae, batch_size=pred_pose.size(0), on_epoch=True
+            f"{key}/pose_mae", pose_mae, batch_size=n_pose, on_epoch=True
         )
 
         # Combined MAE of activity and pose
-        combined_mae = (activity_mae + pose_mae) / 2
+        combined_mae = (activity_mae * n_act + pose_mae * n_pose) / (n_act + n_pose)
 
         self.log(
             f"{key}/mae",
             combined_mae,
-            batch_size=max(pred_activity.size(0), pred_pose.size(0)),
+            batch_size=n_act + n_pose,
             on_epoch=True,
         )
 
