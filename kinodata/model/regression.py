@@ -43,7 +43,7 @@ class RegressionModel(pl.LightningModule):
     log_scatter_plot: bool = False
     log_test_predictions: bool = False
 
-    def __init__(self, config: Config, weight_pki=1, weight_pose=10):
+    def __init__(self, config: Config, weight_pki=1, weight_pose=1):
         super(RegressionModel, self).__init__() #do I need this?
 
         self.config = config
@@ -155,7 +155,7 @@ class RegressionModel(pl.LightningModule):
         self.log(f"{key}/mae", combined_mae, batch_size=max(pred_activity.size(0), pred_pose.size(0)), on_epoch=True)
 
         return {
-            "pred": torch.cat([pred_activity[:, 1], pred_pose[:, 1]]),  # Concatenate activity and pose predictions
+            "pred": torch.cat([pred_activity[:, 1], pred_pose[:, 0]]),  # Concatenate activity and pose predictions
             "target": torch.cat([activity_batch.y, pose_batch.predicted_rmsd]),  # Concatenate activity and pose targets
             f"{key}/mae": combined_mae
             }
