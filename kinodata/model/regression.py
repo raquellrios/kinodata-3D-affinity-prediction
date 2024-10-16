@@ -119,9 +119,9 @@ class RegressionModel(pl.LightningModule):
 
         epsilon = 1e-8
         regulariser_term = 1 / (pred_unc_activity + epsilon)
-        
-        #loss_activity = (target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)))
-	loss_activity = (target_activity - pred_activity).pow(2)
+
+	    #loss_activity = (target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)))
+        loss_activity = (target_activity - pred_activity).pow(2)
         #loss_activity = (((target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)) * pose_certainty) + regulariser_term
 
         return loss_activity
