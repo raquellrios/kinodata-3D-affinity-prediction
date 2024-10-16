@@ -302,7 +302,7 @@ def process_raw_data_david(
 
 
     
-    (df.iloc[0])
+    #(df.iloc[0])
 
     #df=df[:100] #remove this line for total trianing, this is just for smaller training on laptop
 

@@ -113,15 +113,16 @@ class RegressionModel(pl.LightningModule):
 
         #I have made this change now because I think that it should be the RMSD of data, not the predicted one but CHECK! okt 15
         pose_rmsd=batch.predicted_rmsd 
-        pose_certainty = 1 / (1 + torch.exp(torch.clamp(5 * (pose_rmsd - 3), min=-50, max=50)))
+        pose_certainty = 1 / (1 + torch.exp(torch.clamp(5 * (pose_rmsd - 3), min=-50, max=50))) #What about using the posit probability instead so thatit is actually a pose certainty, since this poses are generated in silico
 
 
 
         epsilon = 1e-8
         regulariser_term = 1 / (pred_unc_activity + epsilon)
         
-        #loss_activity = (target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)))  
-        loss_activity = (((target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)) * pose_certainty) + regulariser_term
+        #loss_activity = (target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)))
+	loss_activity = (target_activity - pred_activity).pow(2)
+        #loss_activity = (((target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)) * pose_certainty) + regulariser_term
 
         return loss_activity
 
