@@ -135,9 +135,13 @@ class RegressionModel(pl.LightningModule):
         
         #converting the input into the sigmoid and clamping values
         # I can get rid of the line below when using the cross entropy logit func 
-        target_pose_certainty = 1 / (1 + torch.exp(torch.clamp(5 * (target_exp_rmsd - 3), min=-50, max=50))) #changing this to 3 since most values are actually quite tiny. need to think a bit about this further
+        target_pose_certainty = 1 / (1 + torch.exp(torch.clamp(2 * (target_exp_rmsd - 2), min=-50, max=50))) #changing this to 3 since most values are actually quite tiny. need to think a bit about this further
         
-        #target_pose_certainty = 1 / (1 + torch.exp(5 * (target_exp_rmsd - 3))) 
+        print("pose certainty")
+        print(pose_certainty)
+        print("target_pose_certainty")
+        print(target_pose_certainty)
+	#target_pose_certainty = 1 / (1 + torch.exp(5 * (target_exp_rmsd - 3))) 
         #target_pose_certainty=1 / (1 + torch.exp(10 * (target_exp_rmsd - 2.5)))
 
         loss_pose = torch.nn.functional.binary_cross_entropy_with_logits(pose_certainty, target_pose_certainty)
