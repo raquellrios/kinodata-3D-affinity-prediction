@@ -97,8 +97,25 @@ class RegressionModel(pl.LightningModule):
         pred = self.model(batch)
 
         return pred
+    
+    
+    def rmsd_to_prob_transform(self, pose_rmsd):
+    
+        #prob_pose = 1 / (1 + torch.exp(torch.clamp(2 * (pose_rmsd - 2.2 ), min=-50, max=50)))
+        #prob_pose = 1 / (1 + torch.exp(torch.clamp(2 * (pose_rmsd - 1.5 ), min=-50, max=50)))
+        prob_pose = 1 / (1 + torch.exp(1.5 * (pose_rmsd - 2)))
 
-   
+        return prob_pose
+    
+    
+    def activity_uncertainty_transform(self, activity_unc_raw):
+
+        eps = 1e-8  # Small epsilon to avoid exact 0 or 1
+
+        act_unc = torch.clamp(torch.sigmoid(activity_unc_raw), min=eps, max=1 - eps)
+
+        return act_unc
+
     
     def compute_loss_activity(self, pred, batch):
 
@@ -107,14 +124,16 @@ class RegressionModel(pl.LightningModule):
         
        
         pred_activity = pred[:, 0]
-        pred_unc_activity = pred[:, 1]
+        pred_unc_activity_raw = pred[:, 1]
         #pose_certainty = pred[:, 2]
 
 
         #I have made this change now because I think that it should be the RMSD of data, not the predicted one but CHECK! okt 15
         pose_rmsd=batch.predicted_rmsd 
-        pose_certainty = 1 / (1 + torch.exp(torch.clamp(5 * (pose_rmsd - 3), min=-50, max=50)))
 
+        pose_certainty = self.rmsd_to_prob_transform(pose_rmsd)
+        
+        pred_unc_activity = self.activity_uncertainty_transform(pred_unc_activity_raw)
 
 
         epsilon = 1e-8
@@ -132,12 +151,10 @@ class RegressionModel(pl.LightningModule):
         
         pose_certainty = pred[:, 2]
         
-        #converting the input into the sigmoid and clamping values
-        # I can get rid of the line below when using the cross entropy logit func 
-        target_pose_certainty = 1 / (1 + torch.exp(torch.clamp(5 * (target_exp_rmsd - 3), min=-50, max=50))) #changing this to 3 since most values are actually quite tiny. need to think a bit about this further
+        #converting the input into the sigmoid and clamping values 
+        target_pose_certainty = self.rmsd_to_prob_transform(target_exp_rmsd)
+
         
-        #target_pose_certainty = 1 / (1 + torch.exp(5 * (target_exp_rmsd - 3))) 
-        #target_pose_certainty=1 / (1 + torch.exp(10 * (target_exp_rmsd - 2.5)))
 
         loss_pose = torch.nn.functional.binary_cross_entropy_with_logits(pose_certainty, target_pose_certainty)
 	    #loss_pose = -(target_pose_certainty * torch.log(pose_certainty) + (1 - target_pose_certainty) * torch.log(1 - pose_certainty))
@@ -171,6 +188,7 @@ class RegressionModel(pl.LightningModule):
 
         # Combine losses
         total_loss = self.weight_pki * loss_activity.mean() + self.weight_pose * loss_pose.mean()
+        #total_loss_normalised = self.weight_pki * (loss_activity - loss_activity.mean())/torch.std(loss_activity) + self.weight_pose * loss_pose.mean()
         self.log(
 		"train/total_loss", 
 		total_loss, 
@@ -188,30 +206,33 @@ class RegressionModel(pl.LightningModule):
 
         # Unpack the activity and pose batches directly
         activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
+        n_act, n_pose = activity_batch.num_graphs, pose_batch.num_graphs
 
         # Forward pass for activity batch
         pred_activity = self.forward(activity_batch)
         activity_mae = (pred_activity[:, 0] - activity_batch.y).abs().mean()  # Assuming pred_activity[:, 0] corresponds to pred_activity
-        self.log(f"{key}/activity_mae", activity_mae, batch_size=pred_activity.size(0), on_epoch=True)
+        self.log(f"{key}/activity_mae", activity_mae, batch_size=n_act, on_epoch=True)
     
         # Forward pass for pose batch
-        pred_pose = self.forward(pose_batch)
+        pred_pose_raw = self.forward(pose_batch)
         target_exp_rmsd = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
 
-        target_rmsd = 1 / (1 + torch.exp(torch.clamp(5 * (target_exp_rmsd - 3), min=-50, max=50))) # Transform target_exp_rmsd to target_rmsd
-        pose_mae = (pred_pose[:, 2] - target_rmsd).abs().mean()  
-        self.log(f"{key}/pose_mae", pose_mae, batch_size=pred_pose.size(0), on_epoch=True)
+        target_rmsd = self.rmsd_to_prob_transform(target_exp_rmsd) # Transform target_exp_rmsd to target_rmsd
+        pred_pose = self.rmsd_to_prob_transform(pred_pose_raw[:, 2])
+        
+        pose_mae = (pred_pose - target_rmsd).abs().mean()  
+        self.log(f"{key}/pose_mae", pose_mae, batch_size=n_pose, on_epoch=True)
 
         # Combined MAE of activity and pose
-        combined_mae = (activity_mae + pose_mae) / 2 #do I need to normalise by anything? check simplified code
+        combined_mae = (activity_mae * n_act + pose_mae * n_pose) / (n_act + n_pose)
     
         print(f"Logging {key}/mae: {combined_mae}")
-        self.log(f"{key}/mae", combined_mae, batch_size=max(pred_activity.size(0), pred_pose.size(0)), on_epoch=True)
+        self.log(f"{key}/mae", combined_mae, batch_size=n_act + n_pose, on_epoch=True)
 
 
         # Return predictions and targets for evaluation
         return {
-            	"pred": torch.cat([pred_activity[:, 0] , pred_pose[:, 2]]),  # Concatenate activity and pose predictions
+            	"pred": torch.cat([pred_activity[:, 0] , pred_pose]),  # Concatenate activity and pose predictions
 		        "target": torch.cat([activity_batch.y, target_rmsd]),  # Concatenate activity and pose targets
                 f"{key}/mae": combined_mae
         }

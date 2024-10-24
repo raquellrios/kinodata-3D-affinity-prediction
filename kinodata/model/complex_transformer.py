@@ -240,18 +240,20 @@ class ComplexTransformer(RegressionModel):
 
         graph_repr = self.aggr(node_repr, node_store.batch)
         output = self.out(graph_repr)
+        
+        return output
 
 
         # for uncertainty in activity:
         # Apply softplus to the predicted uncertainty since it always should be positive
-        output_new = output.clone()  # Create a new tensor by cloning `output`
-        output_new[:, 1] = torch.nn.functional.softplus(output[:, 1])
+        #output_new = output.clone()  # Create a new tensor by cloning `output`
+        #output_new[:, 1] = torch.nn.functional.softplus(output[:, 1])
 
         #for certainty in pose I will use sigmoid and clamp values to avoid 0s or 1s
         #eps = 1e-8  # Small epsilon to avoid log(0) or log(1)
         #output_new[:, 2] = torch.clamp(torch.sigmoid(output[:, 2]), min=eps, max=1-eps)
        
-        return output_new
+        #return output_new
 
 
 def make_model(config: Config):
