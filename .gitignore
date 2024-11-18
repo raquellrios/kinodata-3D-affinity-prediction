@@ -11,6 +11,7 @@ wandb
 artifacts
 notebooks
 models
+new_data/kinodata_3d.zip
 kinodata/training/combined*
 kinodata/training/wandb
 kinodata/training/job_submit.sh
