@@ -16,6 +16,10 @@ kinodata/training/wandb
 kinodata/training/job_submit.sh
 kinodata/training/kinodata_extended
 kinodata/training/lightning_logs
+kinodata/training/*.out
+kinodata/training/checkpoints*
+kinodata/training/kinoda-3d_rmsd10
+kinodata/training/kinodata-3d_rmsd10
 # condor logs
 condor/*.log
 condor/*.json
