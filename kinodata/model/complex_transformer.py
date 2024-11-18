@@ -112,7 +112,7 @@ class StructuralInteractions(InteractionModule):
         pos = data[NodeType.Complex].pos
         batch = data[NodeType.Complex].batch
         edge_index = knn_graph(pos, self.max_num_neighbors + 1, batch, loop=True)
-        distances = (pos[edge_index[0]] - pos[edge_index[1]]).pow(2).sum(dim=1).sqrt()
+        distances = (pos[edge_index[0]] - pos[edge_index[1]]).pow(2).sum(dim=1).sqrt() #+ 1e-8 #adding this to clip the value (avoid 0)
         mask = distances <= self.interaction_radius
         edge_index = edge_index[:, mask]
         distances = distances[mask]

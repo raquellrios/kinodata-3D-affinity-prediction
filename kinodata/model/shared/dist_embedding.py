@@ -5,7 +5,7 @@ from torch.nn import Parameter, Module
 
 
 def gaussian(x, mean, std):
-    return torch.exp(-0.5 * (((x - mean) / std) ** 2)) / ((2 * np.pi**0.5) * std)
+    return torch.exp(-0.5 * torch.pow((x - mean) / std, 2)) / ((2 * torch.sqrt(torch.tensor(np.pi, dtype=x.dtype))) * std)
 
 
 class GaussianDistEmbedding(Module):
@@ -26,4 +26,5 @@ class GaussianDistEmbedding(Module):
         return means, stds
 
     def forward(self, d: Tensor) -> Tensor:
+        #self.stds.data.clamp_(min=1e-8)
         return gaussian(d.view(-1, 1), self.means, self.stds)

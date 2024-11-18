@@ -71,9 +71,11 @@ def make_data_module(
         dataset_cls, train_kwargs, split.train_split, one_time_transform
     )
     assert train_dataset is not None
+
     val_dataset = create_dataset(
         dataset_cls, val_kwargs, split.val_split, one_time_transform
     )
+
     test_dataset = create_dataset(
         dataset_cls, test_kwargs, split.test_split, one_time_transform
     )
@@ -114,6 +116,7 @@ def fix_split_for_batch_norm(split: Split, batch_size: int) -> Split:
         split.val_split = fix(split.val_split)
     if split.test_size > 0:
         split.test_split = fix(split.test_split)
+
     return split
 
 
@@ -138,6 +141,11 @@ class CombinedDataset(Dataset):
         self.len2 = len(dataset2)
         self.min_len = min(self.len1, self.len2)
 
+        print("len of kinodata is "+str(self.len1))
+        print("len of davids_data is "+str(self.len2))
+        print("the len of each dataset must then be "+str(self.min_len))
+
+
     def __len__(self):
         return self.min_len  # Adjust this if you want equal-size batches or oversampling
 
@@ -147,6 +155,9 @@ class CombinedDataset(Dataset):
         """
         item1 = self.dataset1[idx]
         item2 = self.dataset2[idx]
+
+        #print("the len of kinodata inside the combineddataset is "+str(len(item1)))
+        #print("the len of davidsdata inside the combineddataset is "+str(len(item2)))
         return {'activity_batch': item1, 'pose_batch': item2}
 
 
@@ -160,6 +171,9 @@ def custom_collate(batch):
     # Create PyTorch Geometric batches from activity and pose data
     activity_batch = Batch.from_data_list(activity_batches)
     pose_batch = Batch.from_data_list(pose_batches)
+
+    #print("inside the custom_collate the kinodata batch is "+str(len(activity_batches)))
+    #print("inside the custom_collate the davids batch is "+str(len(pose_batches)))
 
     return activity_batch, pose_batch
 
@@ -284,6 +298,54 @@ def make_kinodata_module(
     
     dataset_1 = dataset_cls_1()
     dataset_2 = dataset_cls_2()
+
+    ########################################plotting RMSD distributions
+
+    import matplotlib.pyplot as plt
+
+    kinodata3d_activity=torch.tensor([data.y for data in dataset_1])
+
+    range_max=10
+    
+    bins=50
+
+    plt.figure(figsize=(8, 6))
+    plt.hist(kinodata3d_activity, bins=bins, range=(0, 20), color='skyblue', edgecolor='black')
+    plt.title('Activity Distribution (0 to 20)')
+    plt.xlabel('pIC50')
+    plt.ylabel('Frequency')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.savefig("../kinodata3d_activity_distrib.png", format='png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    rmsd_kinodata3d = torch.tensor([data.predicted_rmsd for data in dataset_1])
+    rmsd_davids = torch.tensor([data.predicted_rmsd for data in dataset_2])
+
+
+    rmsd_filtered_kinodata3d = rmsd_kinodata3d[rmsd_kinodata3d <= range_max].cpu().numpy()
+    
+    plt.figure(figsize=(8, 6))
+    plt.hist(rmsd_filtered_kinodata3d, bins=bins, range=(0, range_max), color='skyblue', edgecolor='black')
+    plt.title('RMSD Distribution (0 to 20)')
+    plt.xlabel('RMSD')
+    plt.ylabel('Frequency')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.savefig("../kinodata3d_rmsd_distrib.png", format='png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    rmsd_filtered_davids = rmsd_davids[rmsd_davids <= range_max].cpu().numpy()
+    
+    plt.figure(figsize=(8, 6))
+    plt.hist(rmsd_filtered_davids, bins=bins, range=(0, range_max), color='skyblue', edgecolor='black')
+    plt.title('RMSD Distribution (0 to 20)')
+    plt.xlabel('RMSD')
+    plt.ylabel('Frequency')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.savefig("../davids_rmsd_distrib.png", format='png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    ######################
+
     if config.data_split is not None: #do dataset1 and dataset 2 need to be splitted in the samew way??? ASK
         split = load_precomputed_split(config)
         print("Remapping idents to dataset_1 index..")
@@ -295,6 +357,7 @@ def make_kinodata_module(
         splitter = KinodataKFoldSplit(config.split_type, config.k_fold)
         splits_1 = splitter.split(dataset_1)
         split_1 = splits_1[config.split_index]
+        print(f"Split 1: Train size {split_1.train_size}, Val size {split_1.val_size}, Test size {split_1.test_size}")
     del dataset_1
 
     if config.data_split is not None:
@@ -308,20 +371,29 @@ def make_kinodata_module(
         splitter = KinodataKFoldSplit(config.split_type, config.k_fold)
         splits_2 = splitter.split(dataset_2)
         split_2 = splits_2[config.split_index]
+        print(f"Split 2: Train size {split_2.train_size}, Val size {split_2.val_size}, Test size {split_2.test_size}")
     del dataset_2
 
     
     # dirty batchnorm fix ---DO I NEED THIS?
-    split_1 = fix_split_for_batch_norm(split_1, config.batch_size)
-    split_2 = fix_split_for_batch_norm(split_2, config.batch_size)
+    split_1 = fix_split_for_batch_norm(split_1, config.batch_size/2) 
+    split_2 = fix_split_for_batch_norm(split_2, config.batch_size/2)
 
     print("Creating data module for kinodataset:")
     print(f"    split:{split_1}")
     print(f"    train_transform:{train_transform}")
     print(f"    val_transform:{val_transform}")
+
+
+    #making both splits be exactly the same length so that both datasets are equal in size
+
+    split_1.train_split=split_1.train_split[:len(split_2.train_split)]
+    split_1.val_split=split_1.train_split[:len(split_2.val_split)]
+    split_1.test_split=split_1.train_split[:len(split_2.test_split)]
+
     data_module_1 = make_data_module(
         split_1,
-        config.batch_size,
+        config.batch_size/2,
         config.num_workers,
         dataset_cls=dataset_cls_1,  # type: ignore
         train_kwargs={"transform": train_transform},
@@ -338,7 +410,7 @@ def make_kinodata_module(
     print(dataset_cls_2)
     data_module_2 = make_data_module(
         split_2,
-        config.batch_size,
+        config.batch_size/2,
         config.num_workers,
         dataset_cls=dataset_cls_2,  # type: ignore
         train_kwargs={"transform": train_transform},
@@ -355,6 +427,9 @@ def make_kinodata_module(
     print(f"Train size for dataset 2: {split_2.train_size}")
     print(f"Validation size for dataset 2: {split_2.val_size}")
     print(f"Test size for dataset 2: {split_2.test_size}")
+
+
+    
 
     # Combine both data modules
     combined_data_module = CombinedDataModule(data_module_1, data_module_2, batch_size=config.batch_size)

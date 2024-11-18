@@ -9,10 +9,16 @@ from pytorch_lightning.loggers.wandb import WandbLogger
 
 from kinodata.data.data_module import make_kinodata_module
 
+import random
+import os
+import numpy as np
+
 
 import json
 from pathlib import Path
 from typing import Any
+
+
 from functools import partial
 import sys
 
@@ -42,7 +48,10 @@ import wandb
 
 
 # Initialize wandb with settings to ensure logging
-wandb.init(entity="nextaids", project="kinodata_extended", name="cross_entropy_torch_pose_complex_activity", mode="online", settings=wandb.Settings(silent="false"))
+wandb.finish()
+
+project_name="comparisson_two_forward_rmsd10_2"
+wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, mode="online", settings=wandb.Settings(silent="false"))
 
 
 #%%
@@ -50,13 +59,40 @@ torch.cuda.is_available()
 
 #%%
 
+def set_seed(seed=42):
+    # Set Python random seed
+    random.seed(seed)
+    
+    # Set NumPy random seed
+    np.random.seed(seed)
+    
+    # Set PyTorch random seed
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # If using multi-GPU
+    
+    # Ensure deterministic operations
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False  # May slow down training but ensures reproducibility
+    
+    # Set PyTorch Lightning seed
+    pl.seed_everything(seed, workers=True)
+    
+    # Environment variable for dataloader workers
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+# Call this function at the start of your script
+set_seed(42)
+
+##
+
 data_module = make_kinodata_module(
     cfg.get("data", "training").update(
         dict(
 
-            batch_size=32,
-            split_type="scaffold-k-fold",
-            filter_rmsd_max_value=4.0,
+            batch_size=16,
+            split_type="random-k-fold",
+            filter_rmsd_max_value=10,
             split_index=0,
         )
     ),
@@ -66,23 +102,30 @@ data_module = make_kinodata_module(
 
 #%%
 
+
+
 def train(config, fn_data, fn_model=None):
-    logger = WandbLogger(project="kinodata_extended", log_model="all")
+    
+    logger = WandbLogger(
+        project="kinodata-3d_rmsd10",
+        log_model="all",
+        )
+    
     model = fn_model(config)
     data_module = fn_data
-
+    logger.watch(model, log="all", log_freq=10, log_graph=True)
     print(data_module)
 
     # Setup the data module to initialize datasets
     data_module.setup(stage='fit')
 
         # Print number of batches
-    print(f"Number of batches in the current epoch: {len(data_module.train_dataloader())}")
+    #print(f"Number of batches in the current epoch: {len(data_module.train_dataloader())}")
 
     # Print combined dataset sizes after setup
     # Inside the train function
-    print("Training dataset size:", len(data_module.train_dataset))
-    print(f"Number of batches per epoch: {len(data_module.train_dataloader())}")
+    #print("Training dataset size:", len(data_module.train_dataset))
+    #print(f"Number of batches per epoch: {len(data_module.train_dataloader())}")
 
  ###
     print(f"Dataset 1 training (Activity) size: {len(data_module.train_dataset.dataset1)}")
@@ -92,8 +135,6 @@ def train(config, fn_data, fn_model=None):
     print(f"Dataset 1 test (Activity) size: {len(data_module.test_dataset.dataset1)}")
     print(f"Dataset 2 test (Pose) size: {len(data_module.test_dataset.dataset2)}")
     
-
-
    
     validation_checkpoint = ModelCheckpoint(
         monitor="val/mae",
@@ -121,7 +162,8 @@ def train(config, fn_data, fn_model=None):
         exit()
 
 
-    
+    print(f"Max epochs: {trainer.max_epochs}")
+
 
     trainer.fit(model, datamodule=data_module)
     #trainer.test(ckpt_path="best", datamodule=data_module)
@@ -163,6 +205,8 @@ print(torch.cuda.memory_summary())
 
 
 
+
+
 train(
         config=config,
         fn_model=make_model,
@@ -181,7 +225,5 @@ train(
 
 
 #%%
-
-
 
 

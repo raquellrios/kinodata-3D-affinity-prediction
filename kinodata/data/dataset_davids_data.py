@@ -21,6 +21,7 @@ from typing import (
     Type,
 )
 from dataclasses import dataclass
+import os
 
 import pandas as pd
 import requests  # type : ignore
@@ -191,26 +192,6 @@ def process_raw_data_david(
     df['docking.predicted_rmsd']=benchmark_posit_results['rmsd']
 
 
-    #ligand_smiles_data=benchmark_dataset[['ligand.expo_id', 'smiles']].drop_duplicates()
-
-    ####
-    # Merge ligand_smiles_data with df on ligand expo ID
-    #merged_df = pd.merge(df, ligand_smiles_data, left_on='ligand_expo_id', right_on='ligand.expo_id', how='left')
-    
-    #print('Retrieving SMILES')
-    # Update DataFrame columns using vectorized operations
-    #merged_df['compound_structures.canonical_smiles_2'] = merged_df['smiles']
-
-    #print('Retrieving MOL')
-    #merged_df['molecule'] = merged_df['smiles'].apply(Chem.MolFromSmiles)
-
-    # Drop redundant columns
-    #merged_df.drop(columns=['ligand.expo_id', 'smiles'], inplace=True)
-
-    # Reassign back to df if needed
-    #df = merged_df
-
-
     ##########
 
     # Merge benchmark_dataset with df on protein_pdb_id
@@ -282,33 +263,28 @@ def process_raw_data_david(
 
     print(df.columns)
 
-
-
-    column_kinodata_list= ['docking.posit_probability', 'docking.chemgauss_score',
-       'activities.activity_id', 'assays.chembl_id',
-       'target_dictionary.chembl_id', 'molecule_dictionary.chembl_id',
-       'molecule_dictionary.max_phase', 'activities.standard_type',
-       'activities.standard_units', 'compound_structures.canonical_smiles',
-       'compound_structures.standard_inchi', 'component_sequences.sequence',
-       'assays.confidence_score', 'docs.chembl_id', 'docs.year',
-       'docs.authors', 'UniprotID', 'similar.klifs_structure_id',
-       'similar.fp_similarity', 'ID', 'activities.standard_value',
-       'docking.predicted_rmsd', 'molecule', 'pocket_mol2_file', 'ident',
-       'structure.pocket_sequence']
+    #column_kinodata_list= ['docking.posit_probability', 'docking.chemgauss_score',
+    #   'activities.activity_id', 'assays.chembl_id',
+    #   'target_dictionary.chembl_id', 'molecule_dictionary.chembl_id',
+    #   'molecule_dictionary.max_phase', 'activities.standard_type',
+    #   'activities.standard_units', 'compound_structures.canonical_smiles',
+    #   'compound_structures.standard_inchi', 'component_sequences.sequence',
+    #   'assays.confidence_score', 'docs.chembl_id', 'docs.year',
+    #   'docs.authors', 'UniprotID', 'similar.klifs_structure_id',
+    #   'similar.fp_similarity', 'ID', 'activities.standard_value',
+    #   'docking.predicted_rmsd', 'molecule', 'pocket_mol2_file', 'ident',
+    #   'structure.pocket_sequence']
     
-    for col_name in column_kinodata_list:
-        if col_name not in df.columns:
-            df[col_name] = float('nan')
+    #for col_name in column_kinodata_list:
+    #    if col_name not in df.columns:
+    #        df[col_name] = float(0.0)
 
-
-    
-    (df.iloc[0])
-
-    #df=df[:100] #remove this line for total trianing, this is just for smaller training on laptop
 
     print("DataFrame done")
 
-    return df  #this df and the one fro kinodata_data have exactly the same columns
+    #print(df['activities.standard_value'])
+
+    return df
 
 
 
@@ -334,8 +310,8 @@ class ComplexInformation:
                 row["ident"],
                 row["compound_structures.canonical_smiles"],
                 row["molecule"],
-                float(row["activities.standard_value"]),
-                row["activities.standard_type"],
+                #float(row["activities.standard_value"]),
+                #row["activities.standard_type"],
                 Path(row["pocket_mol2_file"]),
                 float(row["docking.chemgauss_score"]),
                 float(row["docking.posit_probability"]),
@@ -346,6 +322,7 @@ class ComplexInformation:
             )
             for _, row in raw_data.iterrows()
         ]
+
 
     @cached_property
     def ligand(self) -> Any:
@@ -374,7 +351,6 @@ class DavidsDockedAgnostic:
         self.remove_hydrogen = remove_hydrogen
         print(f"Loading davids raw data from {self.raw_dir}...")
         self._df = process_raw_data_david(self.raw_dir, remove_hydrogen=remove_hydrogen)
-        print('wtf')
         print("Converting to data list...")
         self.data_list = ComplexInformation.from_raw(
             self._df, remove_hydrogen=self.remove_hydrogen
@@ -548,7 +524,8 @@ class DavidsdataDocked(InMemoryDataset):
             return process_pyg(item, residue_representation, require_kissim_residues)
 
         # Define the number of parallel processes to use
-        n_jobs = 14  # Use all available CPU cores
+        n_jobs = os.cpu_count()
+        print(f"Number of available CPU cores: {n_jobs}")
 
 
         # Parallelize the processing of items
@@ -716,13 +693,13 @@ def process_pyg(
             return None
         data = add_kissim_fp(data, kissim_fp, subset=PHYSICOCHEMICAL + STRUCTURAL)
 
-    data.y = torch.tensor(complex.activity_value).view(1)
+    #data.y = torch.tensor(complex.activity_value).view(1)
     data.docking_score = torch.tensor(complex.docking_score).view(1)
-    data.posit_prob = torch.tensor(complex.docking_score).view(1)
+    data.posit_prob = torch.tensor(complex.posit_probability).view(1)
     data.predicted_rmsd = torch.tensor(complex.predicted_rmsd).view(1)
     data.pocket_sequence = complex.pocket_sequence
     data.scaffold = ligand_scaffold
-    data.activity_type = complex.activity_type
+    #data.activity_type = complex.activity_type
     data.ident = complex.kinodata_ident
     data.smiles = complex.compound_smiles
     
