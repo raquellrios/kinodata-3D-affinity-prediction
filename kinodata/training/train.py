@@ -50,7 +50,7 @@ import wandb
 # Initialize wandb with settings to ensure logging
 wandb.finish()
 
-project_name="comparisson_two_forward_rmsd10_2"
+project_name="comparisson_one_forward_rmsd10_2"
 wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, mode="online", settings=wandb.Settings(silent="false"))
 
 

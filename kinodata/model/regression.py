@@ -65,13 +65,6 @@ class RegressionModel(pl.LightningModule):
         wandb.define_metric("val/mae", summary="min")
         wandb.define_metric("val/corr", summary="max")
 
-    def on_train_start(self):
-        # Save initial weights at the start of training
-        os.makedirs("checkpoints_initial_two_forward", exist_ok=True)
-        initial_weights_path = "checkpoints_initial_two_forward/initial_weights.pt"
-        torch.save(self.state_dict(), initial_weights_path)
-        print(f"Initial weights saved to {initial_weights_path}")
-
 
     def configure_optimizers(self):
         Opt = resolve_optim(self.hparams.optim)
@@ -106,7 +99,6 @@ class RegressionModel(pl.LightningModule):
         return pred
     
     
-    
     def rmsd_to_prob_transform(self, pose_rmsd):
     
         #prob_pose = 1 / (1 + torch.exp(torch.clamp(2 * (pose_rmsd - 2.2 ), min=-50, max=50)))
@@ -125,7 +117,7 @@ class RegressionModel(pl.LightningModule):
         return act_unc
 
     
-    def compute_loss_activity(self, pred, batch):
+    def compute_loss_activity(self, pred, batch, mask):
 
         target_activity = batch.y 
 
@@ -150,10 +142,10 @@ class RegressionModel(pl.LightningModule):
         #loss_activity = (((target_activity - pred_activity).pow(2) * (1 + pred_unc_activity)) * pose_certainty) + pred_unc_activity #regulariser_term #or + pred_unc_activity#
         
 
-        return torch.mean(loss_activity)
+        return torch.sum(loss_activity * mask)/torch.sum(mask)
 
 
-    def compute_loss_pose(self, pred, batch):
+    def compute_loss_pose(self, pred, batch, mask):
          
         target_exp_rmsd=batch.predicted_rmsd
         
@@ -166,7 +158,14 @@ class RegressionModel(pl.LightningModule):
 
         loss_pose = torch.nn.functional.binary_cross_entropy_with_logits(pose_pred, target_pose_certainty, reduction="none")
 
-        return torch.mean(loss_pose)
+        return torch.sum(loss_pose * mask)/torch.sum(mask)
+    
+    def on_train_start(self):
+        # Save initial weights at the start of training
+        os.makedirs("checkpoints_initial_one_forward", exist_ok=True)
+        initial_weights_path = "checkpoints_initial_one_forward/initial_weights.pt"
+        torch.save(self.state_dict(), initial_weights_path)
+        print(f"Initial weights saved to {initial_weights_path}")
 
 
 
@@ -175,7 +174,7 @@ class RegressionModel(pl.LightningModule):
 
         from torch_geometric.data import Batch
 
-        os.makedirs("checkpoints_two_forward_test", exist_ok=True)
+        os.makedirs("checkpoints_one_forward_test", exist_ok=True)
 
         with torch.autograd.detect_anomaly():
 
@@ -188,52 +187,50 @@ class RegressionModel(pl.LightningModule):
             #print(f"Activity batch size: {activity_batch.num_graphs}")
             #print(f"Pose batch size: {pose_batch.num_graphs}")
 
-           
+            total_batch = Batch.from_data_list([activity_batch, pose_batch])
+            # Create Boolean masks for activity and pose entries
+            activity_mask = torch.cat([torch.ones(n_act, dtype=torch.bool), torch.zeros(n_pose, dtype=torch.bool)]).to(self.device)
+            pose_mask = torch.cat([torch.zeros(n_act, dtype=torch.bool), torch.ones(n_pose, dtype=torch.bool)]).to(self.device)
+
             #print(activity_mask)
             # Forward pass for activity batch
-            pred_act = self.forward(activity_batch)
+            pred = self.forward(total_batch)
 
-            unc_pred=pred_act[:,1]
-            unc_pred_transformed=self.activity_uncertainty_transform(unc_pred)
+            act_pred=pred[:, 0]
+            pose_pred=pred[:,2]
+            unc_pred=pred[:,1]
+            unc_pred_transformed=self.activity_uncertainty_transform(unc_pred[activity_mask])
+            target_exp_rmsd = pose_batch.predicted_rmsd
+            target_rmsd = self.rmsd_to_prob_transform(target_exp_rmsd) # Transform target_exp_rmsd to target_rmsd
+            pred_pose = self.rmsd_to_prob_transform(pose_pred[pose_mask])
+        
 
+           
             print('target_activity')
             print(activity_batch.y)
             print('pred activity is')
-            print(pred_act[:, 0])
+            print(act_pred[activity_mask])
             print("inspection of unc activity pred")
             print(unc_pred_transformed)
             print("uncertainty untrasnformed")
-            print(unc_pred)
+            print(unc_pred[activity_mask])
+            print('rmsd_normal')
+            print(target_exp_rmsd)
+            print("rmsd prediction striaghout of the model")
+            print(pose_pred)
+            print('pred_pose is')
+            print(pred_pose)
+            print('target_rmsd is')
+            print(target_rmsd)
+        
 
-            loss_activity = self.compute_loss_activity(pred_act, activity_batch)
+            loss_activity = self.compute_loss_activity(pred, total_batch, activity_mask)
             self.log("train/loss_activity", loss_activity, batch_size=n_act, on_epoch=True, on_step=True)
     
             # Forward pass for pose batch
-            pred_pose = self.forward(pose_batch) #something I am not sure about this forward prediction is which values is i taking into account, I have some nans
+            #pred_pose = self.forward(pose_batch) #something I am not sure about this forward prediction is which values is i taking into account, I have some nans
 	        #for the activity values for example of the pose batch!
-
-            ####prinitn values
-            target_exp_rmsd_print = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
-
-            target_rmsd_print = self.rmsd_to_prob_transform(target_exp_rmsd_print) # Transform target_exp_rmsd to target_rmsd
-            pred_pose_print = self.rmsd_to_prob_transform(pred_pose[:, 2])
-        
-        
-
-            print('rmsd_normal')
-            print(target_exp_rmsd_print)
-            print('pred_pose is')
-            print(pred_pose_print)
-            print('target_rmsd is')
-            print(target_rmsd_print)
-            print("rmsd prediction striaghout of the model")
-            print(pred_pose[:,2])
-
-            ###
-
-
-            
-            loss_pose = self.compute_loss_pose(pred_pose, pose_batch)
+            loss_pose = self.compute_loss_pose(pred, total_batch, pose_mask)
             self.log("train/loss_pose", loss_pose, batch_size=n_pose, on_epoch=True, on_step=True)
 
             # Combine losses
@@ -258,6 +255,14 @@ class RegressionModel(pl.LightningModule):
                 print("Warning: Decimal batch size detected!")
                 print("n_act:", n_act, "n_pose:", n_pose, "batch_size:", batch_size_test)
 
+            if n_act != int(n_act):  # Check if batch size is decimal
+                print("Warning: Decimal act batch size detected!")
+                print("n_act:", n_act, "n_pose:", n_pose, "batch_size:", batch_size_test)
+
+            if n_pose != int(n_pose):  # Check if batch size is decimal
+                print("Warning: Decimal n_pose batch size detected!")
+                print("n_act:", n_act, "n_pose:", n_pose, "batch_size:", batch_size_test)
+
             
             #print("printing model parameter")
             #print(dict(self.named_parameters())['out.3.weight'])
@@ -276,7 +281,7 @@ class RegressionModel(pl.LightningModule):
                         checkpoint["gradients"][name] = param.grad.clone().cpu()  # Save a copy of gradients to avoid issues
 
                 # Save checkpoint
-                torch.save(checkpoint, f"checkpoints_two_forward_test/model_nan_detected_epoch_{self.current_epoch}.pt")
+                torch.save(checkpoint, f"checkpoints_one_forward_test/model_nan_detected_epoch_{self.current_epoch}.pt")
 
         
                 self.trainer.should_stop = True #stop training if NaNs are detected
@@ -296,7 +301,7 @@ class RegressionModel(pl.LightningModule):
                 #if self.current_epoch % 5 == 0:
                 if self.current_epoch % 1 == 0 and self.trainer.is_last_batch:
 
-                    torch.save(checkpoint, f"checkpoints_two_forward_test/model_all_ok_epoch_{self.current_epoch}.pt")
+                    torch.save(checkpoint, f"checkpoints_one_forward_test/model_all_ok_epoch_{self.current_epoch}.pt")
 
             wandb.log({"batch_size_total_wandb": n_act + n_pose, "batch_size_pose_wandb": n_pose, "batch_size_activity_wandb": n_act,
                    })
@@ -313,42 +318,45 @@ class RegressionModel(pl.LightningModule):
         # Unpack the activity and pose batches directly
         activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
         n_act, n_pose = activity_batch.num_graphs, pose_batch.num_graphs
-        
-       
+        total_batch = Batch.from_data_list([activity_batch, pose_batch])
 
-        # Forward pass for activity batch
-        pred_activity = self.forward(activity_batch)
-        activity_mae = (pred_activity[:, 0] - activity_batch.y).abs().mean()  # Assuming pred_activity[:, 0] corresponds to pred_activity
+        activity_mask = torch.cat([torch.ones(n_act, dtype=torch.bool), torch.zeros(n_pose, dtype=torch.bool)]).to(self.device)
+        pose_mask = torch.cat([torch.zeros(n_act, dtype=torch.bool), torch.ones(n_pose, dtype=torch.bool)]).to(self.device)
+
+        pred = self.forward(total_batch)
+
+        act_pred=pred[:, 0]
+        pose_pred=pred[:,2]
+        unc_pred=pred[:,1]
+        unc_pred_transformed=self.activity_uncertainty_transform(unc_pred[activity_mask])
+        activity_mae = (act_pred[activity_mask] - activity_batch.y).abs().mean()  # Assuming pred_activity[:, 0] corresponds to pred_activity
         self.log(f"{key}/mae_activity", activity_mae, batch_size=n_act, on_epoch=True)
 
-
-      
-        unc_pred=pred_activity[:,1]
-        unc_pred_transformed=self.activity_uncertainty_transform(unc_pred)
-       
         print('checking activity validation')
         print('target_activity')
         print(activity_batch.y)
         print('pred activity is')
-        print(pred_activity[:, 0])
+        print(act_pred[activity_mask])
         print("inspection of unc activity pred")
         print(unc_pred_transformed)
         print("uncertainty untrasnformed")
-        print(unc_pred)
+        print(unc_pred[activity_mask])
 
-        #errors = torch.abs(act_pred[activity_mask] - activity_batch.y)
-        #correlation = torch.corrcoef(torch.stack((errors, unc_pred[activity_mask])))[0, 1]
-        #print("Correlation between error and predicted uncertainty:", correlation.item())
-        #corr_to_record = correlation.item()
-        #self.log("val/error_uncertainty_correlation", corr_to_record, on_epoch=True, on_step=True, batch_size=n_act)
+        errors = torch.abs(act_pred[activity_mask] - activity_batch.y)
+        correlation = torch.corrcoef(torch.stack((errors, unc_pred[activity_mask])))[0, 1]
+        print("Correlation between error and predicted uncertainty:", correlation.item())
+        corr_to_record = correlation.item()
+        self.log("val/error_uncertainty_correlation", corr_to_record, on_epoch=True, on_step=True, batch_size=n_act)
         #wandb.log({"val/error_uncertainty_correlation": corr_to_record})
         
-        # Forward pass for pose batch
-        pred_pose_raw = self.forward(pose_batch)
+
+        
+    
+        
         target_exp_rmsd = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
 
         target_rmsd = self.rmsd_to_prob_transform(target_exp_rmsd) # Transform target_exp_rmsd to target_rmsd
-        pred_pose = self.rmsd_to_prob_transform(pred_pose_raw[:, 2])
+        pred_pose = self.rmsd_to_prob_transform(pose_pred[pose_mask])
         
         pose_mae = (pred_pose - target_rmsd).abs().mean()  
         self.log(f"{key}/pose_mae", pose_mae, batch_size=n_pose, on_epoch=True)
@@ -384,7 +392,7 @@ class RegressionModel(pl.LightningModule):
         #}
     
         return {
-            	"pred_activity": pred_activity[:, 0],
+            	"pred_activity": act_pred[activity_mask] ,
 		        "target_activity": activity_batch.y,   # Concatenate activity and pose targets
                 f"{key}/mae": activity_mae, 
                 "pred_pose": pred_pose, 
@@ -451,28 +459,31 @@ class RegressionModel(pl.LightningModule):
 
     def predict_step(self, batch, *args):
         
+        print('I am in the predict_step')
+        from torch_geometric.data import Batch
+
+        # Unpack the activity and pose batches directly
         activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
         n_act, n_pose = activity_batch.num_graphs, pose_batch.num_graphs
+        total_batch = Batch.from_data_list([activity_batch, pose_batch])
 
-         
-        pred_act = self.forward(activity_batch)
+        activity_mask = torch.cat([torch.ones(n_act, dtype=torch.bool), torch.zeros(n_pose, dtype=torch.bool)]).to(self.device)
+        pose_mask = torch.cat([torch.zeros(n_act, dtype=torch.bool), torch.ones(n_pose, dtype=torch.bool)]).to(self.device)
 
+        pred = self.forward(total_batch)
 
-        act_pred=pred_act[:, 0]
-        unc_pred=pred_act[:, 1]
+        act_pred=pred[:, 0]
+        unc_pred=pred[:, 1]
+        pose_pred=pred[:,2]
+
         
-
-
-        pred_pose_raw = self.forward(pose_batch)
-
         target_exp_rmsd = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
 
         target_rmsd = self.rmsd_to_prob_transform(target_exp_rmsd) # Transform target_exp_rmsd to target_rmsd
-        pred_pose = self.rmsd_to_prob_transform(pred_pose_raw[:, 2])
+        pred_pose = self.rmsd_to_prob_transform(pose_pred[pose_mask])
         
 
-
-        return {"pred activity": act_pred, "target": activity_batch.y, "pred unc activity": unc_pred,  
+        return {"pred activity": act_pred[activity_mask], "target": activity_batch.y, "pred unc activity": unc_pred[activity_mask],  
 		        "pred pose": pred_pose, "pose_target": target_rmsd
                 }
     

@@ -263,26 +263,26 @@ def process_raw_data_david(
 
     print(df.columns)
 
-    #column_kinodata_list= ['docking.posit_probability', 'docking.chemgauss_score',
-    #   'activities.activity_id', 'assays.chembl_id',
-    #   'target_dictionary.chembl_id', 'molecule_dictionary.chembl_id',
-    #   'molecule_dictionary.max_phase', 'activities.standard_type',
-    #   'activities.standard_units', 'compound_structures.canonical_smiles',
-    #   'compound_structures.standard_inchi', 'component_sequences.sequence',
-    #   'assays.confidence_score', 'docs.chembl_id', 'docs.year',
-    #   'docs.authors', 'UniprotID', 'similar.klifs_structure_id',
-    #   'similar.fp_similarity', 'ID', 'activities.standard_value',
-    #   'docking.predicted_rmsd', 'molecule', 'pocket_mol2_file', 'ident',
-    #   'structure.pocket_sequence']
+    column_kinodata_list= ['docking.posit_probability', 'docking.chemgauss_score',
+       'activities.activity_id', 'assays.chembl_id',
+       'target_dictionary.chembl_id', 'molecule_dictionary.chembl_id',
+       'molecule_dictionary.max_phase', 'activities.standard_type',
+       'activities.standard_units', 'compound_structures.canonical_smiles',
+       'compound_structures.standard_inchi', 'component_sequences.sequence',
+       'assays.confidence_score', 'docs.chembl_id', 'docs.year',
+       'docs.authors', 'UniprotID', 'similar.klifs_structure_id',
+       'similar.fp_similarity', 'ID', 'activities.standard_value',
+       'docking.predicted_rmsd', 'molecule', 'pocket_mol2_file', 'ident',
+       'structure.pocket_sequence']
     
-    #for col_name in column_kinodata_list:
-    #    if col_name not in df.columns:
-    #        df[col_name] = float(0.0)
+    for col_name in column_kinodata_list:
+        if col_name not in df.columns:
+            df[col_name] = float(0.0)
 
 
     print("DataFrame done")
 
-    #print(df['activities.standard_value'])
+    print(df['activities.standard_value'])
 
     return df
 
@@ -310,8 +310,8 @@ class ComplexInformation:
                 row["ident"],
                 row["compound_structures.canonical_smiles"],
                 row["molecule"],
-                #float(row["activities.standard_value"]),
-                #row["activities.standard_type"],
+                float(row["activities.standard_value"]),
+                row["activities.standard_type"],
                 Path(row["pocket_mol2_file"]),
                 float(row["docking.chemgauss_score"]),
                 float(row["docking.posit_probability"]),
@@ -693,13 +693,15 @@ def process_pyg(
             return None
         data = add_kissim_fp(data, kissim_fp, subset=PHYSICOCHEMICAL + STRUCTURAL)
 
-    #data.y = torch.tensor(complex.activity_value).view(1)
+    data.y = torch.tensor(complex.activity_value).view(1)
+    #print("printing data.y to make sure it is NOT NAN")
+    #print(data.y)
     data.docking_score = torch.tensor(complex.docking_score).view(1)
     data.posit_prob = torch.tensor(complex.posit_probability).view(1)
     data.predicted_rmsd = torch.tensor(complex.predicted_rmsd).view(1)
     data.pocket_sequence = complex.pocket_sequence
     data.scaffold = ligand_scaffold
-    #data.activity_type = complex.activity_type
+    data.activity_type = complex.activity_type
     data.ident = complex.kinodata_ident
     data.smiles = complex.compound_smiles
     
