@@ -56,6 +56,7 @@ class RegressionModel(pl.LightningModule):
 	    #self.loss_pose=loss_pose #do I need this?
         self.weight_pki = weight_pki
         self.weight_pose = weight_pose
+        self.use_one_forward = True 
         #wandb.watch(self, log="all", log_freq=10)
 
     def define_metrics(self):
@@ -117,7 +118,38 @@ class RegressionModel(pl.LightningModule):
         return act_unc
 
     
-    def compute_loss_activity(self, pred, batch, mask):
+    def compute_loss_activity_mask(self, pred, batch, mask):
+
+        target_activity = batch.y 
+
+        pred_activity = pred[:, 0] 
+        pred_unc_activity_raw = pred[:, 1] 
+        #pose_certainty = pred[:, 2]
+
+
+
+        #I have made this change now because I think that it should be the RMSD of data, not the predicted one but CHECK! okt 15
+        pose_rmsd=batch.predicted_rmsd
+
+        pose_certainty = self.rmsd_to_prob_transform(pose_rmsd)
+        
+        pred_unc_activity = self.activity_uncertainty_transform(pred_unc_activity_raw)
+
+
+        epsilon = 1e-8
+        regulariser_term = 1 / (pred_unc_activity + epsilon)
+        
+         
+        loss_activity = (((target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)) * pose_certainty) + regulariser_term #or + pred_unc_activity#
+        #loss_activity = (((target_activity - pred_activity).pow(2) * (1 + pred_unc_activity)) * pose_certainty) + pred_unc_activity #regulariser_term #or + pred_unc_activity#
+        print("chekcing the mask")
+        print(loss_activity)
+        print(loss_activity * mask)
+
+        return torch.sum(loss_activity * mask)/torch.sum(mask)
+    
+
+    def compute_loss_activity_nomask(self, pred, batch):
 
         target_activity = batch.y 
 
@@ -140,12 +172,34 @@ class RegressionModel(pl.LightningModule):
          
         loss_activity = (((target_activity - pred_activity).pow(2) / (pred_unc_activity.pow(2) + epsilon)) * pose_certainty) + regulariser_term #or + pred_unc_activity#
         #loss_activity = (((target_activity - pred_activity).pow(2) * (1 + pred_unc_activity)) * pose_certainty) + pred_unc_activity #regulariser_term #or + pred_unc_activity#
+        print("chekcing the mask")
+        print(loss_activity)
         
 
-        return torch.sum(loss_activity * mask)/torch.sum(mask)
+
+        return torch.mean(loss_activity)
 
 
-    def compute_loss_pose(self, pred, batch, mask):
+    def compute_loss_pose_mask(self, pred, batch, mask):
+         
+        target_exp_rmsd=batch.predicted_rmsd
+        
+        pose_pred = pred[:, 2] 
+        
+        
+        #converting the input into the sigmoid and clamping values 
+        target_pose_certainty = self.rmsd_to_prob_transform(target_exp_rmsd)
+        #pose_certainty = self.rmsd_to_prob_transform(pose_pred)
+
+        loss_pose = torch.nn.functional.binary_cross_entropy_with_logits(pose_pred, target_pose_certainty, reduction="none")
+        print("chekcing the mask pose")
+        print(loss_pose)
+        print(loss_pose * mask)
+        return torch.sum(loss_pose * mask)/torch.sum(mask)
+    
+
+
+    def compute_loss_pose_nomask(self, pred, batch):
          
         target_exp_rmsd=batch.predicted_rmsd
         
@@ -158,7 +212,10 @@ class RegressionModel(pl.LightningModule):
 
         loss_pose = torch.nn.functional.binary_cross_entropy_with_logits(pose_pred, target_pose_certainty, reduction="none")
 
-        return torch.sum(loss_pose * mask)/torch.sum(mask)
+        print("chekcing the mask pose")
+        print(loss_pose)
+        
+        return torch.mean(loss_pose)
     
     def on_train_start(self):
         # Save initial weights at the start of training
@@ -166,15 +223,38 @@ class RegressionModel(pl.LightningModule):
         initial_weights_path = "checkpoints_initial_one_forward/initial_weights.pt"
         torch.save(self.state_dict(), initial_weights_path)
         print(f"Initial weights saved to {initial_weights_path}")
+        if self.use_one_forward:
+            torch.save(self.state_dict(), "checkpoints_one_forward_test/one_forward_before_initial_training.pt")
+            
+        else:
+            torch.save(self.state_dict(), "checkpoints_two_forward_test/two_forward_before_initial_training.pt")
+            
+
+
+    def training_step(self, batch, *args) -> Tensor:
+        
+        if self.use_one_forward:
+            torch.save(self.state_dict(), "checkpoints_one_forward_test/one_forward_before_training.pt")
+            return self.train_one_forward(batch)
+        else:
+            torch.save(self.state_dict(), "checkpoints_two_forward_test/two_forward_before_training.pt")
+            return self.train_two_forward(batch)
 
 
 
-    def training_step(self, batch, *args) -> Tensor:    #for loop over the bacthes 
+    def train_one_forward(self, batch, *args) -> Tensor:    #for loop over the bacthes 
 
 
         from torch_geometric.data import Batch
 
-        os.makedirs("checkpoints_one_forward_test", exist_ok=True)
+        #os.makedirs("checkpoints_one_forward_test", exist_ok=True)
+
+        #if self.current_epoch == 0 and  batch_idx == 0:
+
+        #    print("weights_before_one_forward_pass.pt")
+
+        #    torch.save(self.state_dict(), "weights_before_one_forward_pass.pt")
+        
 
         with torch.autograd.detect_anomaly():
 
@@ -188,6 +268,19 @@ class RegressionModel(pl.LightningModule):
             #print(f"Pose batch size: {pose_batch.num_graphs}")
 
             total_batch = Batch.from_data_list([activity_batch, pose_batch])
+            #total_batch = Batch.from_data_list([activity_batch, pose_batch])
+
+            # Manually combine scalar/sequence attributes
+            total_batch.pocket_sequence = activity_batch.pocket_sequence + pose_batch.pocket_sequence
+            print("Type of activity_batch.activity_type:", type(activity_batch.activity_type))
+            print("Type of pose_batch.activity_type:", type(pose_batch.activity_type))
+
+		# Convert list to tensor, then concatenate
+
+            total_batch.smiles = activity_batch.smiles + pose_batch.smiles
+            total_batch.activity_type = activity_batch.activity_type + pose_batch.activity_type.tolist()
+            total_batch.scaffold = activity_batch.scaffold + pose_batch.scaffold
+
             # Create Boolean masks for activity and pose entries
             activity_mask = torch.cat([torch.ones(n_act, dtype=torch.bool), torch.zeros(n_pose, dtype=torch.bool)]).to(self.device)
             pose_mask = torch.cat([torch.zeros(n_act, dtype=torch.bool), torch.ones(n_pose, dtype=torch.bool)]).to(self.device)
@@ -195,6 +288,30 @@ class RegressionModel(pl.LightningModule):
             #print(activity_mask)
             # Forward pass for activity batch
             pred = self.forward(total_batch)
+
+            #if self.current_epoch == 0 and batch_idx == 0:
+
+            #    print("weights_after_one_forward_pass.pt")
+            
+            #    torch.save(self.state_dict(), "weights_after_one_forward_pass.pt")
+
+
+            print("===== Debugging Forward Pass =====")
+
+            # Print Predictions
+            print("Predictions (Forward):")
+            print(pred)
+            print(f"Number of Predictions: {len(pred)}")
+            print(total_batch)
+            print("activity batch is")
+            print(activity_batch)
+            print("pose batch is")
+            print(pose_batch)
+            
+
+            print("===================================")
+
+
 
             act_pred=pred[:, 0]
             pose_pred=pred[:,2]
@@ -224,17 +341,20 @@ class RegressionModel(pl.LightningModule):
             print(target_rmsd)
         
 
-            loss_activity = self.compute_loss_activity(pred, total_batch, activity_mask)
+            loss_activity = self.compute_loss_activity_mask(pred, total_batch, activity_mask)
             self.log("train/loss_activity", loss_activity, batch_size=n_act, on_epoch=True, on_step=True)
     
             # Forward pass for pose batch
             #pred_pose = self.forward(pose_batch) #something I am not sure about this forward prediction is which values is i taking into account, I have some nans
 	        #for the activity values for example of the pose batch!
-            loss_pose = self.compute_loss_pose(pred, total_batch, pose_mask)
+            loss_pose = self.compute_loss_pose_mask(pred, total_batch, pose_mask)
             self.log("train/loss_pose", loss_pose, batch_size=n_pose, on_epoch=True, on_step=True)
 
             # Combine losses
             total_loss = self.weight_pki * loss_activity + self.weight_pose * loss_pose
+            
+            torch.save(self.state_dict(), "checkpoints_one_forward_test/one_forward_after_training.pt")
+    
             #total_loss_normalised = self.weight_pki * (loss_activity - loss_activity.mean())/torch.std(loss_activity) + self.weight_pose * loss_pose.mean()
             self.log(
 		    "train/total_loss", 
@@ -242,14 +362,8 @@ class RegressionModel(pl.LightningModule):
 		    batch_size= n_act + n_pose,
 		    on_epoch=True, 
 		    on_step=True)
-            #wandb.log({"batch_size_total_wandb": n_act + n_pose, "batch_size_pose_wandb": n_pose, "batch_size_activity_wandb": n_act,
-            #       }, commit=True)
-            #total=n_act + n_pose
-            #self.log("batch_size_total", total, batch_size=total, on_epoch=True, on_step=True)
-            #self.log("batch_size_pose",  n_pose, batch_size=n_pose, on_epoch=True, on_step=True)
-            #self.log("batch_size_activity", n_act , batch_size= n_act , on_epoch=True, on_step=True)
 
-
+ 
             batch_size_test = n_act + n_pose
             if batch_size_test != int(batch_size_test):  # Check if batch size is decimal
                 print("Warning: Decimal batch size detected!")
@@ -263,9 +377,6 @@ class RegressionModel(pl.LightningModule):
                 print("Warning: Decimal n_pose batch size detected!")
                 print("n_act:", n_act, "n_pose:", n_pose, "batch_size:", batch_size_test)
 
-            
-            #print("printing model parameter")
-            #print(dict(self.named_parameters())['out.3.weight'])
 
             # Check if NaNs are in the loss
             if torch.isnan(total_loss).any() or any(torch.isnan(param.grad).any() for param in self.parameters() if param.grad is not None):
@@ -309,8 +420,169 @@ class RegressionModel(pl.LightningModule):
 
         return total_loss
 
+
+    def train_two_forward(self, batch, *args) -> Tensor:    #for loop over the bacthes 
+
+
+        from torch_geometric.data import Batch
+
+        os.makedirs("checkpoints_two_forward_test", exist_ok=True)
+
+        with torch.autograd.detect_anomaly():
+
+    
+            # Unpack the activity and pose batches directly
+            activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
+            n_act, n_pose = activity_batch.num_graphs, pose_batch.num_graphs
+
+
+            pred_act = self.forward(activity_batch)
+
+
+            print("===== Debugging Forward Pass Activity =====")
+
+            # Print Predictions
+            print("Predictions (Forward):")
+            print(pred_act)
+            print(f"Number of Predictions: {len(pred_act)}")
+            print(activity_batch)
+            
+
+            print("===================================")
+
+
+            unc_pred=pred_act[:,1]
+            unc_pred_transformed=self.activity_uncertainty_transform(unc_pred)
+
+            print('target_activity')
+            print(activity_batch.y)
+            print('pred activity is')
+            print(pred_act[:, 0])
+            print("inspection of unc activity pred")
+            print(unc_pred_transformed)
+            print("uncertainty untrasnformed")
+            print(unc_pred)
+
+            loss_activity = self.compute_loss_activity_nomask(pred_act, activity_batch)
+            self.log("train/loss_activity", loss_activity, batch_size=n_act, on_epoch=True, on_step=True)
+    
+            # Forward pass for pose batch
+            pred_pose = self.forward(pose_batch) #something I am not sure about this forward prediction is which values is i taking into account, I have some nans
+	        #for the activity values for example of the pose batch!
+
+            print("===== Debugging Forward Pass pose =====")
+
+            # Print Predictions
+            print("Predictions (Forward):")
+            print(pred_pose)
+            print(f"Number of Predictions: {len(pred_pose)}")
+            print(pose_batch)
+            print(pose_batch.y)
+            # Print Batch Inputs
+
+
+
+
+            print("===================================")
+
+            ####prinitn values
+            target_exp_rmsd_print = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
+
+            target_rmsd_print = self.rmsd_to_prob_transform(target_exp_rmsd_print) # Transform target_exp_rmsd to target_rmsd
+            pred_pose_print = self.rmsd_to_prob_transform(pred_pose[:, 2])
         
+        
+
+            print('rmsd_normal')
+            print(target_exp_rmsd_print)
+            print('pred_pose is')
+            print(pred_pose_print)
+            print('target_rmsd is')
+            print(target_rmsd_print)
+            print("rmsd prediction striaghout of the model")
+            print(pred_pose[:,2])
+
+            ###
+
+
+            
+            loss_pose = self.compute_loss_pose_nomask(pred_pose, pose_batch)
+            self.log("train/loss_pose", loss_pose, batch_size=n_pose, on_epoch=True, on_step=True)
+
+            # Combine losses
+            total_loss = self.weight_pki * loss_activity + self.weight_pose * loss_pose
+            torch.save(self.state_dict(), "checkpoints_two_forward_test/two_forward_after_training.pt")
+
+            #total_loss_normalised = self.weight_pki * (loss_activity - loss_activity.mean())/torch.std(loss_activity) + self.weight_pose * loss_pose.mean()
+            self.log(
+		    "train/total_loss", 
+		    total_loss, 
+		    batch_size= n_act + n_pose,
+		    on_epoch=True, 
+		    on_step=True)
+
+
+            batch_size_test = n_act + n_pose
+            if batch_size_test != int(batch_size_test):  # Check if batch size is decimal
+                print("Warning: Decimal batch size detected!")
+                print("n_act:", n_act, "n_pose:", n_pose, "batch_size:", batch_size_test)
+
+            # Check if NaNs are in the loss
+            if torch.isnan(total_loss).any() or any(torch.isnan(param.grad).any() for param in self.parameters() if param.grad is not None):
+                
+                print("NaN detected in loss or gradients, saving checkpoint with gradients.")
+
+                 # Save model parameters and gradients
+                checkpoint = {"model_state_dict": self.state_dict(),
+                               "gradients": {}}
+                
+                for name, param in self.named_parameters():
+                    if param.grad is not None:
+                        checkpoint["gradients"][name] = param.grad.clone().cpu()  # Save a copy of gradients to avoid issues
+
+                # Save checkpoint
+                torch.save(checkpoint, f"checkpoints_two_forward_test/model_nan_detected_epoch_{self.current_epoch}.pt")
+
+        
+                self.trainer.should_stop = True #stop training if NaNs are detected
+
+            else:
+
+                #saving the model and gradients hen everthing runs fine
+
+                checkpoint = {"model_state_dict": self.state_dict(), "gradients": {}}
+
+                for name, param in self.named_parameters():
+                    if param.grad is not None:
+                        checkpoint["gradients"][name] = param.grad.clone().cpu()  # Save a copy of gradients to avoid issues
+
+
+                # Save checkpoint
+                #if self.current_epoch % 5 == 0:
+                if self.current_epoch % 1 == 0 and self.trainer.is_last_batch:
+
+                    torch.save(checkpoint, f"checkpoints_two_forward_test/model_all_ok_epoch_{self.current_epoch}.pt")
+
+            wandb.log({"batch_size_total_wandb": n_act + n_pose, "batch_size_pose_wandb": n_pose, "batch_size_activity_wandb": n_act,
+                   })
+
+
+        return total_loss
+    
+
     def validation_step(self, batch, *args, key: str = "val"):
+        
+        if self.use_one_forward:
+            torch.save(self.state_dict(), "checkpoints_one_forward_test/one_forward_before_validation.pt")
+            return self.validate_one_forward(batch, key)
+        else:
+            torch.save(self.state_dict(), "checkpoints_two_forward_test/two_forward_before_validation.pt")
+            return self.validate_two_forward(batch, key)
+        
+
+
+        
+    def validate_one_forward(self, batch, *args, key: str = "val"):
 
 
         from torch_geometric.data import Batch
@@ -372,24 +644,12 @@ class RegressionModel(pl.LightningModule):
 
         # Combined MAE of activity and pose
         combined_mae = (activity_mae * n_act + pose_mae * n_pose) / (n_act + n_pose)
+
+        torch.save(self.state_dict(), "checkpoints_one_forward_test/one_forward_after_validation.pt")
     
         #print(f"Logging {key}/mae: {combined_mae}")
         self.log(f"{key}/mae", combined_mae, batch_size=n_act + n_pose, on_epoch=True)
 
-
-        #checking what I log as outputs
-        #print("activity output")
-        #print(act_pred[activity_mask])
-        #print("pose output")
-        #print(pred_pose)
-
-
-        # Return predictions and targets for evaluation
-        #return {
-        #    	"pred": torch.cat([act_pred[activity_mask],pred_pose]) ,  # Concatenate activity and pose predictions
-		#        "target":  torch.cat([activity_batch.y, target_rmsd]),   # Concatenate activity and pose targets
-        #        f"{key}/mae": combined_mae
-        #}
     
         return {
             	"pred_activity": act_pred[activity_mask] ,
@@ -399,10 +659,79 @@ class RegressionModel(pl.LightningModule):
                 "target_pose": target_rmsd, 
                 f"{key}/mae": pose_mae
              }
+    
+
+    def validate_two_forward(self, batch, *args, key: str = "val"):
+
+
+        from torch_geometric.data import Batch
+
+        # Unpack the activity and pose batches directly
+        activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
+        n_act, n_pose = activity_batch.num_graphs, pose_batch.num_graphs
+        
+       
+
+        # Forward pass for activity batch
+        pred_activity = self.forward(activity_batch)
+        activity_mae = (pred_activity[:, 0] - activity_batch.y).abs().mean()  # Assuming pred_activity[:, 0] corresponds to pred_activity
+        self.log(f"{key}/mae_activity", activity_mae, batch_size=n_act, on_epoch=True)
+
+
+      
+        unc_pred=pred_activity[:,1]
+        unc_pred_transformed=self.activity_uncertainty_transform(unc_pred)
+       
+        print('checking activity validation')
+        print('target_activity')
+        print(activity_batch.y)
+        print('pred activity is')
+        print(pred_activity[:, 0])
+        print("inspection of unc activity pred")
+        print(unc_pred_transformed)
+        print("uncertainty untrasnformed")
+        print(unc_pred)
+
+        
+        # Forward pass for pose batch
+        pred_pose_raw = self.forward(pose_batch)
+        target_exp_rmsd = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
+
+        target_rmsd = self.rmsd_to_prob_transform(target_exp_rmsd) # Transform target_exp_rmsd to target_rmsd
+        pred_pose = self.rmsd_to_prob_transform(pred_pose_raw[:, 2])
+        
+        pose_mae = (pred_pose - target_rmsd).abs().mean()  
+        self.log(f"{key}/pose_mae", pose_mae, batch_size=n_pose, on_epoch=True)
+
+        print('checking pose validation')
+        print('rmsd_normal')
+        print(target_exp_rmsd)
+        print('pred_pose is')
+        print(pred_pose)
+        print('target_rmsd is')
+        print(target_rmsd)
+        
+
+        # Combined MAE of activity and pose
+        combined_mae = (activity_mae * n_act + pose_mae * n_pose) / (n_act + n_pose)
+    
+        #print(f"Logging {key}/mae: {combined_mae}")
+        self.log(f"{key}/mae", combined_mae, batch_size=n_act + n_pose, on_epoch=True)
+        torch.save(self.state_dict(), "checkpoints_two_forward_test/two_forward_after_validation.pt")
+    
+        return {
+            	"pred_activity": pred_activity[:, 0],
+		        "target_activity": activity_batch.y,   # Concatenate activity and pose targets
+                f"{key}/mae": activity_mae, 
+                "pred_pose": pred_pose, 
+                "target_pose": target_rmsd, 
+                f"{key}/mae": pose_mae
+             }
+    
 
     
     
-    def process_eval_outputs(self, outputs) -> float:
+    def process_eval_outputs_one_forward(self, outputs) -> float:
         
         pred_activity = torch.cat([output["pred_activity"] for output in outputs], 0)
         target_activity = torch.cat([output["target_activity"] for output in outputs], 0)
@@ -425,9 +754,40 @@ class RegressionModel(pl.LightningModule):
         return pred_activity, pred_pose, target_activity, target_pose, activity_corr, pose_corr, activity_mae, pose_mae
     
 
-    def validation_epoch_end(self, outputs, *args, **kwargs) -> None:
-        super().validation_epoch_end(outputs)
-        pred_activity, pred_pose, target_activity, target_pose, activity_corr, pose_corr, activity_mae, pose_mae = self.process_eval_outputs(outputs)
+
+    def process_eval_outputs_two_forward(self, outputs) -> float:
+        
+        pred_activity = torch.cat([output["pred_activity"] for output in outputs], 0)
+        target_activity = torch.cat([output["target_activity"] for output in outputs], 0)
+
+        pred_pose = torch.cat([output["pred_pose"] for output in outputs], 0)
+        target_pose = torch.cat([output["target_pose"] for output in outputs], 0)
+
+
+        activity_corr = ((pred_activity - pred_activity.mean()) * (target_activity - target_activity.mean())).mean() / (
+            pred_activity.std() * target_activity.std()
+        ).cpu().item()
+
+        activity_mae = (pred_activity - target_activity).abs().mean()
+
+        pose_corr = ((pred_pose - pred_pose.mean()) * (target_pose - target_pose.mean())).mean() / (
+            pred_pose.std() * target_pose.std()
+        ).cpu().item()
+        pose_mae = (pred_pose - target_pose).abs().mean()
+
+        return pred_activity, pred_pose, target_activity, target_pose, activity_corr, pose_corr, activity_mae, pose_mae
+    
+
+
+    def validation_epoch_end(self, outputs):
+        if self.use_one_forward:
+            # Process outputs for one-forward
+            pred_activity, pred_pose, target_activity, target_pose, activity_corr, pose_corr, activity_mae, pose_mae = self.process_eval_outputs_one_forward(outputs)
+        else:
+            # Process outputs for two-forward
+            pred_activity, pred_pose, target_activity, target_pose, activity_corr, pose_corr, activity_mae, pose_mae = self.process_eval_outputs_two_forward(outputs)
+    
+        # Common logging
         self.log("val/corr_activity", activity_corr)
         self.log("val/corr_pose", pose_corr)
 
@@ -458,8 +818,16 @@ class RegressionModel(pl.LightningModule):
 
 
     def predict_step(self, batch, *args):
+        if self.use_one_forward:
+            return self.predict_one_forward(batch)
+        else:
+            return self.predict_two_forward(batch)
+
+
+
+    def predict_one_forward(self, batch, *args):
         
-        print('I am in the predict_step')
+        
         from torch_geometric.data import Batch
 
         # Unpack the activity and pose batches directly
@@ -487,10 +855,38 @@ class RegressionModel(pl.LightningModule):
 		        "pred pose": pred_pose, "pose_target": target_rmsd
                 }
     
+    def predict_two_forward(self, batch, *args):
+        
+        activity_batch, pose_batch = batch  # batch is a tuple from the DataLoader
+        n_act, n_pose = activity_batch.num_graphs, pose_batch.num_graphs
+
+         
+        pred_act = self.forward(activity_batch)
+
+
+        act_pred=pred_act[:, 0]
+        unc_pred=pred_act[:, 1]
+        
+
+
+        pred_pose_raw = self.forward(pose_batch)
+
+        target_exp_rmsd = pose_batch.predicted_rmsd  # Assuming pose_batch has predicted_rmsd as a target
+
+        target_rmsd = self.rmsd_to_prob_transform(target_exp_rmsd) # Transform target_exp_rmsd to target_rmsd
+        pred_pose = self.rmsd_to_prob_transform(pred_pose_raw[:, 2])
+        
+
+
+        return {"pred activity": act_pred, "target": activity_batch.y, "pred unc activity": unc_pred,  
+		        "pred pose": pred_pose, "pose_target": target_rmsd
+                }
+    
 
     def test_step(self, batch, *args, **kwargs):
         info = self.validation_step(batch, key="test")
         return info
+    
 
     def test_epoch_end(self, outputs, *args, **kwargs) -> None:
         pred_activity, pred_pose, target_activity, target_pose, activity_corr, pose_corr, activity_mae, pose_mae = self.process_eval_outputs(outputs)
@@ -501,7 +897,6 @@ class RegressionModel(pl.LightningModule):
 
         if self.log_test_predictions:
             test_predictions = wandb.Artifact("test_predictions", type="predictions")
-            #data = cat_many(outputs, subset=["pred", "ident"])
             data = cat_many(outputs, subset=["pred_activity", "target_activity", "pred_pose", "target_pose"])
             values = [t.detach().cpu() for t in data.values()]
             values = torch.stack(values, dim=1)

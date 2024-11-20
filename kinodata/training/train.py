@@ -50,7 +50,7 @@ import wandb
 # Initialize wandb with settings to ensure logging
 wandb.finish()
 
-project_name="comparisson_one_forward_rmsd10_2"
+project_name="comparisson_one_forward_4"
 wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, mode="online", settings=wandb.Settings(silent="false"))
 
 
@@ -90,9 +90,9 @@ data_module = make_kinodata_module(
     cfg.get("data", "training").update(
         dict(
 
-            batch_size=16,
+            batch_size=4,
             split_type="random-k-fold",
-            filter_rmsd_max_value=10,
+            filter_rmsd_max_value=4,
             split_index=0,
         )
     ),
@@ -112,6 +112,11 @@ def train(config, fn_data, fn_model=None):
         )
     
     model = fn_model(config)
+    model = fn_model(config)  # Instantiate the model
+    print("Initial Model Weights:")
+    for name, param in model.named_parameters():
+        print(name, param.data[0])  # Print the first value of each parameter
+
     data_module = fn_data
     logger.watch(model, log="all", log_freq=10, log_graph=True)
     print(data_module)
@@ -147,6 +152,14 @@ def train(config, fn_data, fn_model=None):
     
         patience=config.early_stopping_patience, mode="min"
     )
+    
+    USE_ONE_FORWARD = False
+    model.use_one_forward = USE_ONE_FORWARD
+
+    if USE_ONE_FORWARD:
+       print("Using one-forward method.")
+    else:
+       print("Using two-forward method.")
 
     trainer = pl.Trainer(
         logger=logger,
@@ -164,6 +177,16 @@ def train(config, fn_data, fn_model=None):
 
     print(f"Max epochs: {trainer.max_epochs}")
 
+    
+    print("Model Weights Before Validation:")
+    for name, param in model.named_parameters():
+        print(name, param.data[0])
+
+    if USE_ONE_FORWARD == True:
+
+        torch.save(model.state_dict(), "checkpoints_one_forward_test/one_forward_before_validation.pt")
+    else:
+        torch.save(model.state_dict(), "checkpoints_two_forward_test/two_forward_before_validation.pt")
 
     trainer.fit(model, datamodule=data_module)
     #trainer.test(ckpt_path="best", datamodule=data_module)
