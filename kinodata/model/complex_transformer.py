@@ -207,8 +207,9 @@ class ComplexTransformer(RegressionModel):
         self.aggr = SoftmaxAggregation(learn=True, channels=hidden_channels)
         self.out = Sequential(
             *(
-                [Dropout(dropout), BatchNorm1d(hidden_channels)]
-                + [
+                [Dropout(dropout), BatchNorm1d(hidden_channels)]+
+                #[Dropout(dropout), hidden_channels]+
+                 [
                     FF(hidden_channels, hidden_channels, self.act)
                     for _ in range(decoder_hidden_layers)
                 ]
@@ -239,7 +240,9 @@ class ComplexTransformer(RegressionModel):
             node_repr = norm(node_repr, node_store.batch)
 
         graph_repr = self.aggr(node_repr, node_store.batch)
+        #print(f"Shape before BatchNorm: {graph_repr.shape}")
         output = self.out(graph_repr)
+        #print(f"Shape after BatchNorm: {output.shape}")
         
         return output
 

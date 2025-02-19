@@ -26,5 +26,5 @@ class GaussianDistEmbedding(Module):
         return means, stds
 
     def forward(self, d: Tensor) -> Tensor:
-        #self.stds.data.clamp_(min=1e-8)
+        self.stds.data.clamp_(min=1e-8) # doing this to ensure stability
         return gaussian(d.view(-1, 1), self.means, self.stds)

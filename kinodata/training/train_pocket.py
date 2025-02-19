@@ -51,7 +51,7 @@ import wandb
 wandb.finish()
 
 #project_name="test_pertrubation_split1"
-project_name= "calibration_unc_pose_random_split_kfold1_soft_rmsd"
+project_name= "pocket_split_kfold4"
 #project_name="model_wact0_wpose1_pose_scaffold_all_data_soft_rmsd_split1:5_scaffold_tests_perturb_positions_0.2"
 wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, mode="online", settings=wandb.Settings(silent="false"))
 
@@ -96,7 +96,7 @@ data_module = make_kinodata_module(
         dict(
 
             batch_size=32,
-            split_type="random-k-fold",
+            split_type="pocket-k-fold",
             filter_rmsd_max_value=10,
             split_index=0,
         )

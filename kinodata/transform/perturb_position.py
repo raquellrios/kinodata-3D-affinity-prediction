@@ -49,6 +49,12 @@ class PerturbAtomPositions(BaseTransform):
         self.generator = torch.Generator().manual_seed(seed)
 
     def __call__(self, data: HeteroData) -> HeteroData:
+
+        #if self.atom_key not in data:
+        #    raise KeyError(f"Key '{self.atom_key}' not found in data. Available keys: {list(data.keys())}")
+        
+        #print(f"NodeStorage keys for atom_key '{self.atom_key}': {list(data[self.atom_key].keys())}")
+
         pos = data[self.atom_key].pos
         noisy_pos = self.perturb_gaussian(pos, std=self.std)
 

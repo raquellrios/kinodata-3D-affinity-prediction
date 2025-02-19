@@ -1,0 +1,59 @@
+Sender: LSF System <lsfadmin@ls08>
+Subject: Job 11554140: <job_submit.sh> in cluster <lila> Exited
+
+Job <job_submit.sh> was submitted from host <lilac-ln02> by user <lopezrir> in cluster <lila> at Thu Jan  9 03:43:42 2025
+Job was executed on host(s) <ls08>, in queue <cpuqueue>, as user <lopezrir> in cluster <lila> at Thu Jan  9 03:43:44 2025
+</home/lopezrir> was used as the home directory.
+</data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training> was used as the working directory.
+Started at Thu Jan  9 03:43:44 2025
+Terminated at Thu Jan  9 03:43:52 2025
+Results reported at Thu Jan  9 03:43:52 2025
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -P "create-data_KINODATA"
+#BSUB -J "one_forward"
+#BSUB -R span[hosts=1]
+#BSUB -oo /data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/delete.out
+#BSUB -cwd /data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training 
+#BSUB -n 1
+#BSUB -R rusage[mem=100]
+#BSUB -q gpuqueue
+#BSUB -gpu "num=1:gmem=34G"
+#BSUB -W 0:30
+# Load your bash profile to ensure conda is initialized
+source ~/.bashrc
+
+conda activate kinodata_gpu_lilac
+
+python3 train.py
+
+------------------------------------------------------------
+
+TERM_OWNER: job killed by owner.
+Exited with exit code 130.
+
+Resource usage summary:
+
+    CPU time :                                   1.65 sec.
+    Max Memory :                                 -
+    Average Memory :                             -
+    Total Requested Memory :                     2.00 GB
+    Delta Memory :                               -
+    Max Swap :                                   -
+    Max Processes :                              4
+    Max Threads :                                5
+    Run time :                                   8 sec.
+    Turnaround time :                            10 sec.
+
+The output (if any) follows:
+
+
+
+PS:
+
+Read file <job_submit.sh.e> for stderr output of this job.
+
