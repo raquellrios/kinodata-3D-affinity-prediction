@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -11,6 +12,7 @@ import pytorch_lightning as pl
 import numpy as np
 import os
 import pandas as pd
+
 
 #qqplot
 import statsmodels.api as sm
@@ -56,7 +58,7 @@ class RegressionModel(pl.LightningModule):
         self.save_hyperparameters(config)  # triggers wandb hook
         self.define_metrics()
 
-        self.training_step_outputs = {"activity": []}
+        self.training_step_outputs = {"activity": [], "pose": []}
         self.test_step_outputs = {"activity": [], "pose": []}
 
         #self.use_one_forward = True
@@ -75,6 +77,14 @@ class RegressionModel(pl.LightningModule):
         # Accumulators for losses per dataset
         self.loss_activity_running = []
         self.loss_pose_running = []
+
+        # Making trainable the rmsd transformation
+        #self.rmsd_scale = nn.Parameter(torch.tensor(0.5)) #making it learnable
+        #self.rmsd_shift = nn.Parameter(torch.tensor(4.5))
+
+
+	##directory output name
+        self.directory_csv_name = "soft/normalised_act" #"learnable_rmsd/shift_set/clamp"
 
         
 
@@ -123,9 +133,16 @@ class RegressionModel(pl.LightningModule):
         #prob_pose = 1 / (1 + torch.exp(torch.clamp(2 * (pose_rmsd - 1.5 ), min=-50, max=50)))
         #prob_pose = 1 / (1 + torch.exp(2 * (pose_rmsd - 2.1)))
         #prob_pose = 1 / (1 + torch.exp(0.5 * (pose_rmsd - 4)))
+
+
         #new tries
-        prob_pose = 1 / (1 + torch.exp( 0.7 * (pose_rmsd - 4.5))) #soft
+        #prob_pose = 1 / (1 + torch.exp( 1.5 * (pose_rmsd - 4.5))) #steep
+        prob_pose = 1 / (1 + torch.exp( 0.7 * (pose_rmsd - 4.5)))#soft
+        #prob_pose = 1 / (1 + torch.exp( 1 * (pose_rmsd - 6))) #m. soft
         #prob_pose = 1 / (1 + torch.exp( 0.7 * (pose_rmsd - 6))) # v. soft
+
+        #prob_pose = 1 / (1 + torch.exp( self.rmsd_scale * (pose_rmsd - self.rmsd_shift)))
+        #prob_pose = 1 / (1 + torch.exp( self.rmsd_scale * (pose_rmsd - 4.5))) 
 
         
         return prob_pose
@@ -211,6 +228,105 @@ class RegressionModel(pl.LightningModule):
         results_df = pd.DataFrame(results).sort_values(by="count", ascending=False)
 
         return results_df
+    
+
+    def plot_unc_act_pose(self, pose, act_unc, epoch, name):
+
+        import seaborn as sns
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+
+        contour = sns.kdeplot(
+                x=pose,
+                y=act_unc,
+                cmap="Blues",
+                fill=True,
+                levels=20,
+                ax=ax,
+
+             )
+
+        # Fix colorbar issue
+        mappable = contour.collections[-1]  # Get last contour for colorbar
+
+        fig.colorbar(mappable, ax=ax, label="Density")  # Attach the colorbar
+
+        plt.xlabel("Pose Quality")
+        plt.ylabel("Predicted Uncertainty (σ)")
+        plt.xlim(0, 1)
+        plt.title(f"Contour Plot of Uncertainty vs. Pose Quality at {epoch}")
+        wandb.log({f" Act unc and pose calibration contour plot {name}": wandb.Image(plt)})
+        plt.close(fig)
+
+
+
+    def calibration_plot(self, std_variance, residuals, name):
+
+        #percentiles = np.linspace(0, 100, 10)
+        #bin_edges = np.percentile(std_variance, percentiles)  # Find bin edges
+        bin_edges = np.linspace(std_variance.min(), std_variance.max(), 11)
+        bin_indices = np.digitize(std_variance, bin_edges, right=True)  # Assign σ values to bins
+            
+             
+        mean_pred_sigma = []
+        mean_abs_error = []
+        #residuals=residuals.cpu().numpy()
+
+
+            
+        for i in range(1, 11):
+            mask = bin_indices == i
+            if np.sum(mask) > 0:
+                mean_pred_sigma.append(np.mean(std_variance[mask]))
+                mean_abs_error.append(np.mean(residuals[mask]))
+
+
+
+        plt.figure(figsize=(6, 6))
+        plt.plot(mean_pred_sigma, mean_abs_error, 'bo-', label="Model Calibration")
+        plt.plot([0, max(mean_pred_sigma)], [0, max(mean_pred_sigma)], 'r--', label="Perfect Calibration (y=x)")
+        plt.xlabel("Predicted Uncertainty (σ)")
+        plt.ylabel("Actual Absolute Error |y - ŷ|")
+        plt.title("Uncertainty Calibration Plot")
+        plt.legend()
+        plt.grid()
+        # Log to Weights & Biases (W&B)
+        wandb.log({f"Calibration plot {name}": wandb.Image(plt)})
+        plt.close()
+
+
+    def qqplot(self, residuals, y_std, name):
+        
+        standardized_residuals = (residuals / y_std)
+
+      
+        # Generate Q-Q plot
+        fig = sm.qqplot(standardized_residuals, line='45', fit=True)
+        plt.title(f"Q–Q Plot of Training Residuals (Epoch {self.current_epoch})")
+        plt.xlabel("Theoretical Quantiles")
+        plt.ylabel("Empirical Quantiles")
+            
+        # Log to Weights & Biases (W&B)
+        wandb.log({f"Q-Q Plot of Standardized Residuals {name}": wandb.Image(plt)})
+        plt.close(fig)
+
+    def pose_distribution(self, pose, name):
+
+        plt.hist(pose, bins=20)
+        plt.xlabel("Pose quality prediction")
+        plt.xlim(0, 1)
+        plt.ylabel("Count")
+        wandb.log({f"Predicted pose distribution {name}": wandb.Image(plt)})
+        plt.close()
+
+    def act_distribution(self, act, name):
+
+        plt.hist(act, bins=50)
+        plt.xlabel("Activity prediction")
+        plt.ylabel("Count")
+        wandb.log({f"Predicted Activity distribution {name}": wandb.Image(plt)})
+        plt.close()
 
   
 
@@ -308,7 +424,9 @@ class RegressionModel(pl.LightningModule):
         
         return loss_pose
 
-
+    def on_training_epoch_start(self):
+        """Reset training storage at the start of each epoch."""
+        self.training_step_outputs = {"activity": [], "pose": []}
 
     def training_step(self, batch, batch_idx, dataloader_idx=0, *args) -> Tensor:
 
@@ -319,6 +437,12 @@ class RegressionModel(pl.LightningModule):
 
         #print(f"Batch index: {batch_idx}, Dataloader index: {dataloader_idx}, Batch type: {type(batch)}")
         #print(batch)  
+
+        if "pose" not in self.training_step_outputs:
+            self.training_step_outputs["pose"] = []
+
+        if "activity" not in self.training_step_outputs:
+            self.training_step_outputs["activity"] = []
 
 
         if batch["activity"]:  # Dataset 1 (Activity)
@@ -361,7 +485,8 @@ class RegressionModel(pl.LightningModule):
                     "pred_activity": pred_act[:,0].detach(),
                     "target_activity": batch_activity.y.detach(),
                     "variance": variance,
-                    "pose":self.rmsd_to_prob_transform(pred_act[:,2]).detach()
+                    "pose":self.rmsd_to_prob_transform(pred_act[:,2]).detach(), 
+                    "target_pose":self.rmsd_to_prob_transform(batch_activity.predicted_rmsd).detach()
                     })
             
             self.log("nll_mean_term", torch.mean((batch_activity.y - pred_act[:,0]) ** 2 / variance), batch_size=batch_activity.num_graphs, on_step=True, on_epoch=True)
@@ -399,6 +524,11 @@ class RegressionModel(pl.LightningModule):
             self.log("pose_corr_training", pose_corr_training, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=True)
             self.log("train/weight_pose", self.current_weight_pose, batch_size= batch_pose.num_graphs, on_epoch=True, on_step=False)
 
+            self.training_step_outputs["pose"].append({
+                    "pose_pred":pred_pose_prob.detach(), 
+                    "target_pose":target_rmsd.detach()
+                    })
+
 
 
         activity_loss = self.current_weight_pki * loss_activity if batch["activity"] is not None else 0
@@ -416,10 +546,12 @@ class RegressionModel(pl.LightningModule):
         #total_loss = activity_loss #del
 
         self.log("train/total_loss", total_loss, batch_size= n_pose+n_act, on_epoch=True, on_step=True)
+        #self.log("rmsd_shift", self.rmsd_shift, batch_size= n_pose+n_act, on_epoch=True, on_step=False)
+        #self.log("rmsd_scale", self.rmsd_scale, batch_size= n_pose+n_act, on_epoch=True, on_step=True)
         #self.log("train/total_loss", total_loss, batch_size= n_act, on_epoch=True, on_step=True) #del
 
 
-        
+
 
         return total_loss
 
@@ -427,7 +559,13 @@ class RegressionModel(pl.LightningModule):
 
     def on_train_epoch_end(self):
 
+        #self.rmsd_shift.data.clamp(1.0, 10.0)
+        #self.rmsd_scale.data.clamp(0.1, 5.0)
+        #wandb.log({"rmsd_scale": self.rmsd_scale.item(), "rmsd_shift" : self.rmsd_shift.item()})
+        
+
         #for q-q plot of trianing to compare to validation
+
 
         if self.current_epoch % 5 == 0 and self.training_step_outputs["activity"]:  # logging every 5 epochs
 
@@ -439,87 +577,88 @@ class RegressionModel(pl.LightningModule):
              pred_activity = torch.cat([x["pred_activity"] for x in self.training_step_outputs["activity"]])
              target_activity = torch.cat([x["target_activity"] for x in self.training_step_outputs["activity"]])
              pred_variance = torch.cat([x["variance"] for x in self.training_step_outputs["activity"]])
+             pose=torch.cat([x["pose"] for x in self.training_step_outputs["activity"]]).detach().cpu().numpy()
+             target_pose = torch.cat([x["target_pose"] for x in self.training_step_outputs["activity"]]).detach().cpu().numpy()
 
+             pose_batch=torch.cat([x["pose_pred"] for x in self.training_step_outputs["pose"]]).detach().cpu().numpy()
+             target_pose_pose_batch=torch.cat([x["target_pose"] for x in self.training_step_outputs["pose"]]).detach().cpu().numpy()
+
+             std_variance=torch.sqrt(pred_variance).detach().cpu().numpy()
+             epoch=str(self.current_epoch)
+
+             ####save the data
+             target_activity = target_activity.detach().cpu().numpy()
+             
+             save_dir="/data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/data_runs/"+str(self.directory_csv_name)
+
+             pred_activity=pred_activity.detach().cpu().numpy()
+             df = pd.DataFrame({"PredictedPoseQuality": pose, "PredictedStd": std_variance, "PredictedActivity": pred_activity, "TargetActivity": target_activity, "TargetPose":target_pose})
+            
+             # Define file name
+             file_path = os.path.join(save_dir, f"training_{epoch}.csv")
+            
+             # Save to CSV
+             df.to_csv(file_path, index=False)
+            
+             print(f"Saved calibration data at epoch {epoch} to {file_path}")
+             
+             ##Q-Q plot
+             #name="training"
              # Compute residuals and standardised residuals
-             residuals = torch.abs(target_activity - pred_activity).detach().cpu().numpy()
-             y_std = torch.sqrt(pred_variance).detach().cpu().numpy()
-             standardized_residuals = (residuals / y_std)
+             #residuals = torch.abs(target_activity - pred_activity).detach().cpu().numpy()
+             #y_std = torch.sqrt(pred_variance).detach().cpu().numpy()
+             #qqplot=self.qqplot(residuals, y_std, name)
 
-             # Generate Q-Q plot
-             fig = sm.qqplot(standardized_residuals, line='45', fit=True)
-             plt.title(f"Q–Q Plot of Training Residuals (Epoch {self.current_epoch})")
-             plt.xlabel("Theoretical Quantiles")
-             plt.ylabel("Empirical Quantiles")
+             ### kde plot unc act and pose
+             
+             #epoch=str(self.current_epoch)
+             #fig=self.plot_unc_act_pose(pose, std_variance, epoch, name)
+
+
+             #calibraiton plot unc activity and residuals
+             #std_variance=torch.sqrt(pred_variance).detach().cpu().numpy()
+             #cal = self.calibration_plot(std_variance, residuals, name)
+
+
+             ## pose prediction distrib (davids dataset)
+             #name_pose="pose_batch_training"
+             #pose_plot = self.pose_distribution(pose_batch, name_pose)
+
+             ## pose target distrib (davids dataset)
+             #name_pose="target_pose_batch_training"
+             #pose_plot = self.pose_distribution(target_pose_pose_batch, name_pose)
+
+
+
+
+             ### kde plot act residuals and pose pred
+
+             #name_2="training_act_residuals"
+             
+             #fig_act_res_pose=self.plot_unc_act_pose(pose, residuals, epoch, name_2)
+
+             
+
+        if self.current_epoch == 0:
+
+            save_dir="/data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/data_runs/"+str(self.directory_csv_name)
+
+            df = pd.DataFrame({"TargetPose":target_pose_pose_batch})
             
-             # Log to Weights & Biases (W&B)
-             wandb.log({"Q-Q Plot of Standardized Residuals Training": wandb.Image(plt)})
-             plt.close(fig)
-
-
-             #calibraiton plot unc activitz and residuals
-             std_variance=torch.sqrt(pred_variance).cpu().numpy()
-             percentiles = np.linspace(0, 100, 10)
-             #bin_edges = np.percentile(std_variance, percentiles)  # Find bin edges
-             bin_edges = np.linspace(std_variance.min(), std_variance.max(), 11)
-             bin_indices = np.digitize(std_variance, bin_edges, right=True)  # Assign σ values to bins
+            # Define file name
+            file_path = os.path.join(save_dir, f"training_davids_data.csv")
             
-             print("bin edges are")
-             print(bin_edges)
-             print("bin indices are")
-             print(bin_indices)
-             print("std values are")
-             print(std_variance)
-             mean_pred_sigma = []
-             mean_abs_error = []
-             #residuals=residuals.cpu().numpy()
+            # Save to CSV
+            df.to_csv(file_path, index=False)
             
-             for i in range(1, 11):
-                mask = bin_indices == i
-                if np.sum(mask) > 0:
-                    mean_pred_sigma.append(np.mean(std_variance[mask]))
-                    mean_abs_error.append(np.mean(residuals[mask]))
-
-             plt.figure(figsize=(6, 6))
-             plt.plot(mean_pred_sigma, mean_abs_error, 'bo-', label="Model Calibration")
-             plt.plot([0, max(mean_pred_sigma)], [0, max(mean_pred_sigma)], 'r--', label="Perfect Calibration (y=x)")
-             plt.xlabel("Predicted Uncertainty (σ)")
-             plt.ylabel("Actual Absolute Error |y - ŷ|")
-             plt.title("Uncertainty Calibration Plot")
-             plt.legend()
-             plt.grid()
-              # Log to Weights & Biases (W&B)
-             wandb.log({"Calibration plot Training": wandb.Image(plt)})
-             plt.close()
-
-            
-            #calibraiton plot unc activity and pose pred####################
-             std_variance=torch.sqrt(pred_variance).cpu().numpy()
-             pose=torch.cat([x["pose"] for x in self.training_step_outputs["activity"]]).cpu().numpy()
-
-    
-             plt.figure(figsize=(6, 6))
-             plt.plot(pose, std_variance, "o")
-             plt.xlabel("Pose quality)")
-             plt.ylabel("Predicted std")
-             plt.title("Correlation act unc and pose pred")
-              # Log to Weights & Biases (W&B)
-             wandb.log({" Act unc and pose calibration plot Training": wandb.Image(plt)})
-             plt.close()
+            print(f"Saved training pose data  to {file_path}")
 
 
-             #calibraiton plot residual activity and pose pred####################
-            
-             plt.figure(figsize=(6, 6))
-             plt.plot(pose, residuals, "o")
-             plt.xlabel("Pose quality)")
-             plt.ylabel("Act residual")
-             plt.title("Correlation act residuals and pose pred")
-              # Log to Weights & Biases (W&B)
-             wandb.log({" Residual pose calibration plot Training": wandb.Image(plt)})
-             plt.close()
+        
+ 
 
 
-        self.training_step_outputs["activity"].clear()
+        self.training_step_outputs.clear()
 
         
 
@@ -553,7 +692,8 @@ class RegressionModel(pl.LightningModule):
                 "target_activity": batch.y.detach(),
                 "variance": pred_variance.detach(),
                 #"residuals": residuals.detach(),
-                "pose":self.rmsd_to_prob_transform(pred_activity[:,2]).detach()
+                "pose":self.rmsd_to_prob_transform(pred_activity[:,2]).detach(),
+                "target_pose":self.rmsd_to_prob_transform(batch.predicted_rmsd).detach()
                 })
 
         elif dataloader_idx == 1:  # Dataset 2 (Pose)
@@ -582,9 +722,6 @@ class RegressionModel(pl.LightningModule):
         """
         Computes validation metrics at epoch end, handling alternating datasets correctly.
         """
-
-
-
 
 
         activity_outputs = self.validation_step_outputs.get("activity", [])
@@ -661,7 +798,27 @@ class RegressionModel(pl.LightningModule):
         #     plt.close(fig_corr)
         #     plt.close(fig_mae)
 
-         #Generate Q-Q plot every 5 epochs
+
+        #get first data iteration for val set
+
+        if self.current_epoch == 0:
+
+            save_dir="/data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/data_runs/"+str(self.directory_csv_name)
+
+            df = pd.DataFrame({"TargetPose":target_pose.detach().cpu().numpy()})
+            
+            # Define file name
+            file_path = os.path.join(save_dir, f"validation_davids_data.csv")
+            
+            # Save to CSV
+            df.to_csv(file_path, index=False)
+            
+            print(f"Saved validation pose data  to {file_path}")
+
+            
+
+
+        #Generate Q-Q plot every 5 epochs
         if self.current_epoch % 5 == 0: #--> change to 5 later
 
             import numpy as np
@@ -671,76 +828,58 @@ class RegressionModel(pl.LightningModule):
             target_activity = target_activity.detach().cpu().numpy() #if isinstance(target_activity, torch.Tensor) else target_activity
             pred_activity = pred_activity.detach().cpu().numpy() #if isinstance(pred_activity, torch.Tensor) else pred_activity
             variance = pred_variance.detach().cpu().numpy() #if isinstance(variance, torch.Tensor) else variance
-            residuals = np.abs(target_activity - pred_activity)
-            #residuals = residuals.detach().cpu().numpy()
-            
-            
-            # Compute standardized residuals
-            y_std = np.sqrt(variance)
-            standardized_residuals = residuals / y_std
+            #residuals = np.abs(target_activity - pred_activity)
 
-        #     # Create and log Q-Q plot
-            fig = sm.qqplot(standardized_residuals, line='45', fit=True)
-            plt.title("Q-Q Plot of Standardized Residuals Validation")
-            plt.xlabel("Theoretical Quantiles")
-            plt.ylabel("Empirical Quantiles")
-            wandb.log({"Q-Q Plot of Standardized Residuals Validation": wandb.Image(plt)})
-            plt.close(fig)
+            pose_act=torch.cat([x["pose"] for x in activity_outputs]).detach().cpu().numpy()
+            target_pose_act=torch.cat([x["target_pose"] for x in activity_outputs]).detach().cpu().numpy()
 
-            #calibraiton plot
             std_variance = np.sqrt(variance)
-            percentiles = np.linspace(0, 100, 10)
-            #bin_edges = np.percentile(std_variance, percentiles)  # Find bin edges
-            bin_edges = np.linspace(std_variance.min(), std_variance.max(), 11)
-            bin_indices = np.digitize(std_variance, bin_edges, right=True)  # Assign σ values to bins
+            epoch=str(self.current_epoch)
+
+
+            save_dir="/data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/data_runs/"+str(self.directory_csv_name)
+
+            df = pd.DataFrame({"PredictedPoseQuality": pose_act, "PredictedStd": std_variance, "PredictedActivity": pred_activity, "TargetActivity": target_activity, "TargetPose":target_pose_act})
             
-            mean_pred_sigma = []
-            mean_abs_error = []
-            #residuals=residuals.cpu().numpy()
+            # Define file name
+            file_path = os.path.join(save_dir, f"validation_{epoch}.csv")
             
-            for i in range(1, 11):
-                mask = bin_indices == i
-                if np.sum(mask) > 0:
-                    mean_pred_sigma.append(np.mean(std_variance[mask]))
-                    mean_abs_error.append(np.mean(residuals[mask]))
-
-            plt.figure(figsize=(6, 6))
-            plt.plot(mean_pred_sigma, mean_abs_error, 'bo-', label="Model Calibration")
-            plt.plot([0, max(mean_pred_sigma)], [0, max(mean_pred_sigma)], 'r--', label="Perfect Calibration (y=x)")
-            plt.xlabel("Predicted Uncertainty (σ)")
-            plt.ylabel("Actual Absolute Error |y - ŷ|")
-            plt.title("Uncertainty Calibration Plot")
-            plt.legend()
-            plt.grid()
-              # Log to Weights & Biases (W&B)
-            wandb.log({"Calibration plot Validation": wandb.Image(plt)})
-            plt.close()
-
-
-            #calibraiton plot unc activity and pose pred####################
-            std_variance=torch.sqrt(pred_variance).cpu().numpy()
-            pose=torch.cat([x["pose"] for x in activity_outputs]).cpu().numpy()
-
-    
-            plt.figure(figsize=(6, 6))
-            plt.plot(pose, std_variance, "o")
-            plt.xlabel("Pose quality)")
-            plt.ylabel("Predicted std")
-            plt.title("Correlation act unc and pose pred")
-              # Log to Weights & Biases (W&B)
-            wandb.log({" Act unc and pose calibration plot Validation": wandb.Image(plt)})
-            plt.close()
-
-            #calibraiton plot residual activity and pose pred####################
+            # Save to CSV
+            df.to_csv(file_path, index=False)
             
-            plt.figure(figsize=(6, 6))
-            plt.plot(pose, residuals, "o")
-            plt.xlabel("Pose quality)")
-            plt.ylabel("Act residuals")
-            plt.title("Correlation act residuals and pose pred")
-              # Log to Weights & Biases (W&B)
-            wandb.log({" Residual pose calibration plot Validation": wandb.Image(plt)})
-            plt.close()
+            print(f"Saved calibration validation data at epoch {epoch} to {file_path}")
+
+            #residuals = residuals.detach().cpu().numpy()
+
+            ##Q-Q plot
+            #name="validation"
+            #y_std = torch.sqrt(pred_variance).detach().cpu().numpy()
+            #qqplot=self.qqplot(residuals, y_std, name)
+
+
+            #calibraiton plot unc activity and residuals
+            #std_variance = np.sqrt(variance)
+            #cal = self.calibration_plot(std_variance, residuals, name)
+            #self.calibration_plot(std_variance, residuals, name)
+
+            ## pose prediction distrib (davids dataset)
+            #name_pose="pose_batch"
+            #pose_plot = self.pose_distribution(pred_pose.detach().cpu().numpy(), name_pose)
+
+            ## pose prediction distrib (davids dataset)
+            #name_pose="target_pose_batch"
+            #pose_plot_target = self.pose_distribution(target_pose.detach().cpu().numpy(), name_pose)
+
+
+            ### kde plot unc act and pose
+             
+            #epoch=str(self.current_epoch)
+            #fig = self.plot_unc_act_pose(pose_act, std_variance, epoch, name)
+
+
+            ### kde plot act residuals and pose pred            
+
+            
 
 
         self.validation_step_outputs.clear()  # free memory

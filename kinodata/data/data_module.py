@@ -14,6 +14,7 @@ from torch_geometric.transforms import Compose
 from kinodata.configuration import Config
 from kinodata.data.data_split import Split
 from kinodata.data.grouped_split import KinodataKFoldSplit
+from sklearn.preprocessing import StandardScaler
 #from kinodata.data.grouped_split import print_scaffolds_in_splits, save_scaffolds_to_csv, count_scaffold_distribution, visualise_scaffold_overlap
 
 from kinodata.data.dataset import (
@@ -179,14 +180,17 @@ def visualise_scaffold_overlap_with_bars(dataset, csv_file):
 def make_data_module(
     split: Split,
     batch_size: int,
-    num_workers: int,
+    num_workers: int = 1,
     dataset_cls: type[InMemoryDataset],
     train_kwargs: Kwargs,
     val_kwargs: Optional[Kwargs] = None,
     test_kwargs: Optional[Kwargs] = None,
     one_time_transform: Optional[Callable[[InMemoryDataset], InMemoryDataset]] = None,
+    normalization: bool = False,
     **kwargs,
-) -> LightningDataset:
+    ) -> LightningDataset:
+
+
     assert_unique_value("pre_transform", train_kwargs, val_kwargs, test_kwargs)
 
     if split.val_split is not None and val_kwargs is None:
@@ -217,6 +221,47 @@ def make_data_module(
     test_dataset = create_dataset(
         dataset_cls, test_kwargs, split.test_split, one_time_transform
     )
+
+
+    # Normalize function
+    def normalize_activity(dataset, scaler):
+        if dataset is None:
+            return None
+        new_data_list = []
+        for data in dataset:
+            new_data = data.clone()  # Clone to avoid modifying original dataset in-place
+            new_data.y = torch.tensor(scaler.transform(data.y.reshape(-1,1)), dtype=torch.float32)[0]
+            new_data_list.append(new_data)
+
+        return new_data_list  # Return updated dataset
+
+        
+        
+    if normalization:
+
+        #normalization
+        activity_values = torch.tensor([data.y for data in train_dataset], dtype=torch.float32).reshape(-1,1)
+
+        print("verify normalization of activities")
+        print("mean "+str(activity_values.mean().item())+" std "+str(activity_values.std().item()))
+        
+
+        scaler = StandardScaler()
+        scaler.fit_transform(activity_values.numpy())
+
+        train_dataset = normalize_activity(train_dataset, scaler)
+        val_dataset = normalize_activity(val_dataset, scaler)
+        test_dataset = normalize_activity(test_dataset, scaler)
+
+        
+        normalized_values = torch.tensor([data.y for data in train_dataset], dtype=torch.float32).reshape(-1,1)
+
+        print("**After Normalization**")
+        print(f"  Mean: {normalized_values.mean().item():.4f}, Std: {normalized_values.std().item():.4f}")
+        print(f"  Sample values: {normalized_values[:5].squeeze().tolist()}")  # Print first few values
+        
+    
+
 
     return LightningDataset(
         train_dataset=train_dataset,
@@ -333,10 +378,15 @@ class CombinedDataModule(pl.LightningDataModule):
         super().__init__()
         self.dm_a = dm_a  # Data module for activity dataset
         self.dm_b = dm_b  # Data module for pose dataset
+        
 
     def setup(self, stage=None):
         self.dm_a.setup(stage=stage)
         self.dm_b.setup(stage=stage)
+
+
+
+
 
     print(CombinedLoader.__init__.__doc__)
 
@@ -518,7 +568,8 @@ def make_kinodata_module(
   
     #print(type(config))
     #print("above is the type of config")
-    #config["perturb_ligand_positions"] = 0.1
+    #
+    #config["perturb_ligand_positions"] = 0.01
     #config["perturb_complex_positions"] = 0.5
     
 
@@ -563,6 +614,7 @@ def make_kinodata_module(
 
     
     dataset_1 = dataset_cls_1()
+
     dataset_2 = dataset_cls_2()
 
     ########################################plotting RMSD distributions
@@ -655,9 +707,14 @@ def make_kinodata_module(
         splitter = KinodataKFoldSplit(config.split_type, config.k_fold)
         splits_1 = splitter.split(dataset_1)
         split_1 = splits_1[config.split_index]
-        #split_1 = splits_1[3]
+        #split_1 = splits_1[2]
         print(f"Split kinodata: Train size {split_1.train_size}, Val size {split_1.val_size}, Test size {split_1.test_size}")
+
+
     del dataset_1
+
+
+
 
     if config.data_split is not None:
         #print("running this with config.data_split is not None!!!!!!!")
@@ -675,7 +732,7 @@ def make_kinodata_module(
         print("the k-fold is "+str(config.k_fold))
         splits_2 = splitter.split(dataset_2)
         split_2 = splits_2[config.split_index]
-        #split_2 = splits_2[3]
+        #split_2 = splits_2[2]
         print(split_2)
         print(f"Split rmsd_data: Train size {split_2.train_size}, Val size {split_2.val_size}, Test size {split_2.test_size}")
 
@@ -779,12 +836,14 @@ def make_kinodata_module(
     data_module_1 = make_data_module(
         split_1,
         config.batch_size,
-        config.num_workers,
+        #config.num_workers,
+        num_workers = 1,
         dataset_cls=dataset_cls_1,  # type: ignore
         train_kwargs={"transform": train_transform},
         val_kwargs={"transform": val_transform},
         test_kwargs={"transform": val_transform}, #is this okay?
         one_time_transform=one_time_transform,
+        normalization=True
     )
 
     print("Creating data module for davidsdockeddataset:")
@@ -797,7 +856,8 @@ def make_kinodata_module(
     data_module_2 = make_data_module(
         split_2,
         config.batch_size, 
-        config.num_workers,
+        #config.num_workers,
+        num_workers = 1,
         dataset_cls=dataset_cls_2,  # type: ignore
         train_kwargs={"transform": train_transform},
         val_kwargs={"transform": val_transform},
@@ -809,6 +869,8 @@ def make_kinodata_module(
     print(f"Train size for dataset 1: {split_1.train_size}")
     print(f"Validation size for dataset 1: {split_1.val_size}")
     print(f"Test size for dataset 1: {split_1.test_size}")
+
+
 
     print(f"Train size for dataset 2: {split_2.train_size}")
     print(f"Validation size for dataset 2: {split_2.val_size}")
