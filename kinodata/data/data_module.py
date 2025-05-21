@@ -180,7 +180,7 @@ def visualise_scaffold_overlap_with_bars(dataset, csv_file):
 def make_data_module(
     split: Split,
     batch_size: int,
-    num_workers: int = 1,
+    num_workers: int,
     dataset_cls: type[InMemoryDataset],
     train_kwargs: Kwargs,
     val_kwargs: Optional[Kwargs] = None,

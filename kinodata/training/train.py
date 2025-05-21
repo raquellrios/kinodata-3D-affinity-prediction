@@ -50,10 +50,10 @@ import wandb
 # Initialize wandb with settings to ensure logging
 wandb.finish()
 
-#project_name="test_pertrubation_split1"
+project_name="x2_pose_logits_normalised_act_soft_kfold1_cleanscript_test"
 #project_name= "random_split_kfold1_soft_learnable_rmsd_shift_clamp_5_set_act_normalised"
 #project_name="model_wact0_wpose1_pose_scaffold_all_data_soft_rmsd_split1:5_scaffold_tests_perturb_positions_0.2"
-project_name="normalised_act_soft_kfold1"
+#project_name="x2_pose_data_iris_logits_normalised_act_soft_kfold1"
 wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, mode="online", settings=wandb.Settings(silent="false"))
 
 
@@ -220,6 +220,7 @@ config["seed"] = 16
 #config["num_heads"]=2
 config["split_index"]=0
 config["num_workers"]=1
+config["csv_save_dir"]="/data1/choderaj/lopezrr/kinodata-3D-affinity-prediction/kinodata/training/data_runs/x2_pose_logits_normalised_act_soft_kfold1_cleanscript_test"
 print(config)
 
 
