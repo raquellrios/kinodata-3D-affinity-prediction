@@ -21,6 +21,7 @@ kinodata/training/kinodata_extended
 kinodata/training/lightning_logs
 kinodata/training/*.out
 kinodata/training/*.err
+kinodata/training/.core.101455.swp
 kinodata/training/checkpoints*/
 kinodata/training/kinoda-3d_rmsd10
 kinodata/training/kinodata-3d_rmsd10
