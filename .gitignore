@@ -11,17 +11,27 @@ wandb
 artifacts
 notebooks
 models
+kinodata/*.png
 new_data/kinodata_3d.zip
 kinodata/training/combined*
+kinodata/training/train_pocket.py
 kinodata/training/wandb
 kinodata/training/job_submit.sh
 kinodata/training/kinodata_extended
 kinodata/training/lightning_logs
 kinodata/training/*.out
+kinodata/training/*.err
 kinodata/training/checkpoints*/
 kinodata/training/kinoda-3d_rmsd10
 kinodata/training/kinodata-3d_rmsd10
 kinodata/training/data_runs
+kinodata/training/*.sh
+kinodata/model/regression_og_may24.py
+kiondata/data/data_module_og_may.py
+kinodata/data/non_matching_smiles.txt
+kinodata/data/docked_data_check_onerow.py
+kinodata/data/docked_data_check.py
+
 # condor logs
 condor/*.log
 condor/*.json

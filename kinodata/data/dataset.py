@@ -68,18 +68,6 @@ def _repr(obj: Any) -> str:
     return re.sub("(<.*?)\\s.*(>)", r"\1\2", obj.__repr__())
 
 
-def to_list(value: Any) -> Sequence:
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        return value
-    else:
-        return [value]
-
-
-def _repr(obj: Any) -> str:
-    if obj is None:
-        return "None"
-    return re.sub("(<.*?)\\s.*(>)", r"\1\2", obj.__repr__())
-
 # Fetch Uniprot ID
 def fetch_uniprot_id(klifs_id):
 
@@ -123,19 +111,13 @@ def process_raw_data_kinodata(
                 ) -> pd.DataFrame:
     
 
-
-
-    print('succsefully running kinodata function')
-
-
-    print(raw_dir)
-
     if pocket_dir is None:
         pocket_dir = raw_dir / "mol2" / "pocket"
     if pocket_sequence_file is None:
         pocket_sequence_file = raw_dir / "pocket_sequences.csv"
     raw_fp = str(raw_dir / file_name)
     print(f"Reading data frame from {raw_fp}...")
+
     df = PandasTools.LoadSDF(
         raw_fp,
         smilesName="compound_structures.canonical_smiles",
@@ -144,11 +126,8 @@ def process_raw_data_kinodata(
         removeHs=remove_hydrogen,
     )
 
-    print('df reading is done')
-    print(df.columns)
+
     if activity_type_subset is not None:
-        print(activity_type_subset)
-        #df = df.query("activities.standard_type in @activity_type_subset")
         df = df.query("`activities.standard_type` == @activity_type_subset")
     df["activities.standard_value"] = df["activities.standard_value"].astype(float)
     df["docking.predicted_rmsd"] = df["docking.predicted_rmsd"].astype(float)
@@ -213,7 +192,6 @@ def process_raw_data_kinodata(
 
     print("Adding pocket sequences...")
     # KLIFS API now sometimes decides to timeout
-    print(df.shape)
     while True:
         try:
             with CachedSequences(pocket_sequence_file) as sequence_cache:
@@ -230,9 +208,7 @@ def process_raw_data_kinodata(
             print(f"Querying KLIFS for sequence from structure id raised {e}")
             print("Retrying..")
             sleep(10)
-    print(df.shape)
 
-    #df=df[:100] #remove this line for total trianing, this is just for smaller training on laptop
 
     return df
 
@@ -456,26 +432,6 @@ class KinodataDocked(InMemoryDataset):
         complex_info = ComplexInformation.from_raw(
             self.df, remove_hydrogen=self.remove_hydrogen
         )
-        #import numpy as np
-        #np.save('/home/raquellrdc/Desktop/postdoc/fast_ml_final/new_data_try/complex_info.npy', complex_info)
-        #if self.use_multiprocessing:
-        #    print('I am doing option 1')
-        #    print(len(complex_info))
-        #    print(complex_info[0])
-        #    import numpy as np
-        #    np.save(complex_info)
-        #    print('saved')
-        #    tasks = [
-        #        (_complex, self.residue_representation, self.require_kissim_residues)
-        #        for _complex in complex_info
-        #    ]
-        #    print(tasks)
-        #    
-        #    with mp.Pool(os.cpu_count()) as pool:
-        #        data_list = pool.map(_process_pyg, tqdm(tasks))
-        #else:
- 
-
 
 
         ####
