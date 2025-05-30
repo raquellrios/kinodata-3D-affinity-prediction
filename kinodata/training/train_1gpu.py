@@ -41,29 +41,22 @@ from kinodata.model.complex_transformer import ComplexTransformer, make_model
 from kinodata.types import NodeType
 from kinodata.data.dataset import apply_transform_instance_permament
 from kinodata.transform.to_complex_graph import TransformToComplexGraph
-
-
-#%%
 import wandb 
+from pytorch_lightning.callbacks import ModelCheckpoint
 
-
-# Initialize wandb with settings to ensure logging
+# wandb initialization
 wandb.finish()
 
-project_name="8_cpux2_pose_lilac_logits_normalised_act_soft_kfold1_clean_reg_datamod_test"
-#project_name= "random_split_kfold1_soft_learnable_rmsd_shift_clamp_5_set_act_normalised"
-#project_name="model_wact0_wpose1_pose_scaffold_all_data_soft_rmsd_split1:5_scaffold_tests_perturb_positions_0.2"
-#project_name="x2_pose_data_iris_logits_normalised_act_soft_kfold1"
+project_name="lilac_32cpus_learnablermsd"
 wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, mode="online", settings=wandb.Settings(silent="false"))
 
-
-#%%
+#checking cuda stuff
 print(torch.cuda.is_available())
 print(torch.version.cuda)  # PyTorch CUDA version
 print(torch.backends.cudnn.version())  # cuDNN version
 print(torch.cuda.get_device_name(0))  # Should match your GPU
 
-#%%
+
 
 def set_seed(seed=41):
     # Set Python random seed
@@ -87,28 +80,84 @@ def set_seed(seed=41):
     # Environment variable for dataloader workers
     os.environ["PYTHONHASHSEED"] = str(seed)
 
-# Call this function at the start of your script
+# setting seed
 set_seed(41)
 
-##
 
-#data_module = make_kinodata_module(
-#    cfg.get("data", "training").update(
-#        dict(
-#
-#            batch_size=32,
-#            split_type="random-k-fold",
-#            filter_rmsd_max_value=10,
-#            split_index=0,
-#        )
-#    ),
-#    transforms=[TransformToComplexGraph(remove_heterogeneous_representation=False)],
-#)
+####config
+
+configuration.register(
+        "sparse_transformer",
+        max_num_neighbors=16,
+        hidden_channels=256,
+        num_attention_blocks=3,
+        num_heads=8,
+        act="silu",
+        edge_attr_size=4,
+        ln1=True,
+        ln2=True,
+        ln3=True,
+        graph_norm=False,
+        interaction_modes=["covalent", "structural"],
+    )
 
 
-#%%
+config = configuration.get("data", "training", "sparse_transformer")
+config["node_types"] = ["complex"]
+config["batch_size"] = 32
+config["accumulate_grad_batches"] = 4
+config["perturb_complex_positions"] = 0
+config["perturb_ligand_positions"] = 0.0
+config["need_distances"] = False
+config["perturb_pocket_positions"] = 0.0
+config["early_stopping_patience"] = 100
+config["seed"] = 16 #probably need ot change this so it mathces the seed 41
+config["batch_size"] = 32
+config["split_type"] = "random-k-fold"
+config["filter_rmsd_max_value"] = 10
+config["split_index"]=0
+config["max_epochs"] = 500
+config["accelerator"] = "gpu"
+
+def get_safe_num_workers():
+    try:
+        return max(8, len(os.sched_getaffinity(0))) 
+    except AttributeError:
+        return min(1, os.cpu_count())
+n_w=get_safe_num_workers()
+
+print(f"num workers from train script {n_w}")
+config["num_workers"]=n_w
+config["csv_save_dir"]="/data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/data_runs/lilac_32cpus_learnablermsd"
 
 
+print(f"the configuration is {config}")
+####
+#parameters for pose
+#config["weight_decay"] = 0.005n
+#config["dropout"] = 0.2
+#for overfitting delete afterwards
+#parameters below for overfit
+#config["lr"] = 1e-3
+#config["min_lr"] = 1e-4
+#config["max_epochs"] = 600
+#smaller model
+#config["hidden_channels"] = 64
+#config["num_attention_blocks"] = 2
+#config["num_heads"]=2
+
+torch.cuda.empty_cache()
+print(torch.cuda.memory_summary())
+
+#to save the model while running
+checkpoint_callback = ModelCheckpoint(
+    dirpath="checkpoints_learnable/",
+    filename="best_model",
+    save_top_k=1,
+    monitor="val/mae_activity",  # or "val_activity_loss", etc
+    mode="min",
+    save_last=True
+)
 
 def train(config, fn_data, fn_model=None):
     
@@ -131,41 +180,29 @@ def train(config, fn_data, fn_model=None):
     data_module.setup(stage='fit')
     
    
-    validation_checkpoint = ModelCheckpoint(
-        monitor="val/mae_activity",
-        mode="min",
-    )
+    #validation_checkpoint = ModelCheckpoint(
+    #    monitor="val/mae_activity",
+    #    mode="min",
+    #)
     #print(data_module)
     lr_monitor = LearningRateMonitor("epoch")
     early_stopping = EarlyStopping(
         monitor="val/mae_activity", 
         patience=config.early_stopping_patience, 
         mode="min",
-        
-        #enabled=False #only changing this to see the model overfitting, change back for normal training!
     )
     
-    #USE_ONE_FORWARD = False
-    #model.use_one_forward = USE_ONE_FORWARD
-
-    #if USE_ONE_FORWARD:
-    #   print("Using one-forward method.")
-    #else:
-    #   print("Using two-forward method.")
-
     trainer = pl.Trainer(
+        callbacks=[checkpoint_callback, lr_monitor, early_stopping],
         logger=logger,
         #auto_select_gpus=True,
-        max_epochs=500,   #config.epochs,  
+        max_epochs=config.max_epochs,  
         accelerator=config.accelerator,
+        #strategy = "ddp",
         devices=1,
         accumulate_grad_batches=config.accumulate_grad_batches,
-        callbacks=[validation_checkpoint, lr_monitor, early_stopping],
-        #callbacks=[validation_checkpoint, lr_monitor], #only for overfit
+        #callbacks=[validation_checkpoint, lr_monitor, early_stopping],
         gradient_clip_val=config.clip_grad_value,
-        #overfit_batches=2
-
-
     )
     if config.dry_run:
         print("Exiting: config.dry_run is set.")
@@ -174,85 +211,10 @@ def train(config, fn_data, fn_model=None):
 
     print(f"Max epochs: {trainer.max_epochs}")
 
-    print(f"Config value for perturb_ligand_positions inside the train function: {config['perturb_ligand_positions']}")
-
 
     trainer.fit(model, datamodule=data_module)
     #trainer.test(ckpt_path="best", datamodule=data_module)
 
-configuration.register(
-        "sparse_transformer",
-        max_num_neighbors=16,
-        hidden_channels=256,
-        num_attention_blocks=3,
-        num_heads=8,
-        act="silu",
-        edge_attr_size=4,
-        ln1=True,
-        ln2=True,
-        ln3=True,
-        graph_norm=False,
-        interaction_modes=["covalent", "structural"],
-    )
-config = configuration.get("data", "training", "sparse_transformer")
-config["node_types"] = ["complex"]
-config["batch_size"] = 32
-config["split_type"]="random-k-fold"
-config["filter_rmsd_max_value"]=10
-config["split_index"]=0
-config["accumulate_grad_batches"] = 4
-####
-config["perturb_complex_positions"] = 0
-config["perturb_ligand_positions"] = 0.0
-config["need_distances"] = False
-config["perturb_pocket_positions"] = 0.0
-####
-config["early_stopping_patience"] = 100
-config["seed"] = 16
-#parameters for pose
-#config["weight_decay"] = 0.005n
-#config["dropout"] = 0.2
-#for overfitting delete afterwards
-#parameters below for overfit
-#config["lr"] = 1e-3
-#config["min_lr"] = 1e-4
-#config["max_epochs"] = 600
-#smaller model
-#config["hidden_channels"] = 64
-#config["num_attention_blocks"] = 2
-#config["num_heads"]=2
-config["split_index"]=0
-
-#get the right workers
-#if os.cpu_count != 1:
-#    n_w=os.cpu_count() -2
-#else:
-#    n_w=1
-def get_safe_num_workers():
-    try:
-        return min(8, len(os.sched_getaffinity(0)))  # or whatever limit you want
-    except AttributeError:
-        return min(8, os.cpu_count())
-
-n_w=get_safe_num_workers()
-print(f"num workers from train script {n_w}")
-
-config["num_workers"]=n_w
-
-
-config["csv_save_dir"]="/data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/data_runs/x2_pose_logits_normalised_act_soft_kfold1_cleanscript_reg_datamod_datasets_test_8cpu"
-print(config)
-
-
-
-
-import torch
-torch.cuda.empty_cache()
-print(torch.cuda.memory_summary())
-
-
-
-print(f"Config value for perturb_ligand_positions before calling make_kinodata_module: {config['perturb_ligand_positions']}")
 
 data_module = make_kinodata_module(
     config,

@@ -12,7 +12,7 @@ import pandas as pd
 from kinodata.configuration import Config
 from kinodata.model.resolve import resolve_loss
 from kinodata.model.resolve import resolve_optim
-
+from pytorch_lightning.utilities import rank_zero_only
 
 def cat_many(
     data: List[Dict[str, Tensor]], subset: Optional[List[str]] = None, dim: int = 0
@@ -60,9 +60,8 @@ class RegressionModel(pl.LightningModule):
         self.current_weight_pose = initial_weight_pose
         self.current_weight_pki = initial_weight_pki
 
-
         # Making trainable the rmsd transformation
-        #self.rmsd_scale = nn.Parameter(torch.tensor(0.4)) 
+        self.rmsd_scale = nn.Parameter(torch.tensor(0.5)) 
         #self.rmsd_shift = nn.Parameter(torch.tensor(4.5))
         
 
@@ -108,14 +107,11 @@ class RegressionModel(pl.LightningModule):
     def rmsd_to_prob_transform(self, pose_rmsd):
     
 
-        #new tries
-        #prob_pose = 1 / (1 + torch.exp( 1.5 * (pose_rmsd - 4.5))) #steep
-        prob_pose = 1 / (1 + torch.exp( 0.7 * (pose_rmsd - 4.5)))#soft
-        #prob_pose = 1 / (1 + torch.exp( 1 * (pose_rmsd - 6))) #m. soft
-        #prob_pose = 1 / (1 + torch.exp( 0.7 * (pose_rmsd - 6))) # v. soft
-
-        #prob_pose = 1 / (1 + torch.exp( self.rmsd_scale * (pose_rmsd - self.rmsd_shift)))
-        #prob_pose = 1 / (1 + torch.exp( self.rmsd_scale * (pose_rmsd - 4.5))) 
+        
+        #prob_pose = 1 / (1 + torch.exp( 0.7 * (pose_rmsd - 4.5)))#soft
+        
+   
+        prob_pose = 1 / (1 + torch.exp( self.rmsd_scale * (pose_rmsd - 4.5))) 
 
         
         return prob_pose
@@ -175,9 +171,6 @@ class RegressionModel(pl.LightningModule):
 
         """
 
-        #print(f"Batch index: {batch_idx}, Dataloader index: {dataloader_idx}, Batch type: {type(batch)}")
-        #print(batch)  
-
         loss_activity = torch.tensor(0., device=self.device)
         loss_pose = torch.tensor(0., device=self.device)
 
@@ -199,6 +192,7 @@ class RegressionModel(pl.LightningModule):
             self.log("batch_act", batch_activity.num_graphs, batch_size=batch_activity.num_graphs, on_epoch=False, on_step=True)
 
             self.log("train/weight_pki", self.current_weight_pki, batch_size= batch_activity.num_graphs, on_epoch=True, on_step=False)
+
 
             if self.current_epoch % 10 == 0:
                 self.training_step_outputs["activity"].append({
@@ -235,6 +229,7 @@ class RegressionModel(pl.LightningModule):
             loss_pose = self.compute_loss_pose(pred_pose, batch_pose)
             self.log("train/loss_pose", loss_pose, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=True)
             self.log("batch_pose", batch_pose.num_graphs, batch_size=batch_pose.num_graphs, on_epoch=False, on_step=True)
+            self.log("train/scale_rmsd", self.rmsd_scale, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=False)
             
                         
 
@@ -274,6 +269,7 @@ class RegressionModel(pl.LightningModule):
     def _reset_buffers_val(self):
         self.validation_step_outputs = {"activity": [], "pose": []}
     
+    @rank_zero_only
     def on_train_epoch_end(self):
 
         if self.current_epoch % 10 != 0: #or self.global_rank != 0:
@@ -355,6 +351,7 @@ class RegressionModel(pl.LightningModule):
                 
 
 
+    @rank_zero_only
     def on_validation_epoch_end(self):
         """
         Computes validation metrics at epoch end, handling alternating datasets correctly.

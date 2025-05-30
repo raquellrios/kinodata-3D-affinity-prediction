@@ -282,13 +282,14 @@ def make_kinodata_module(
     print(f"Split kinodata: Train size {split_act.train_size}, Val size {split_act.val_size}, Test size {split_act.test_size}")
     print(f"Split kinodocked: Train size {split_pose.train_size}, Val size {split_pose.val_size}, Test size {split_pose.test_size}")
 
-    print(f"the number of workers selected for both datasets are {config.num_workers}")
 
+    num_workers_config = getattr(config, 'num_workers', 1)
+    print(f"the number of workers selected for both datasets are {num_workers_config}")
 
     data_module_1 = make_data_module(
         split_act,
         config.batch_size,
-        num_workers = config.num_workers,
+        num_workers = num_workers_config,
         dataset_instance=activity_ds,
         train_kwargs={"transform": train_transform},
         val_kwargs={"transform": val_transform},
@@ -300,7 +301,7 @@ def make_kinodata_module(
     data_module_2 = make_data_module(
         split_pose,
         config.batch_size, 
-        num_workers = config.num_workers,
+        num_workers = num_workers_config,
         dataset_instance=pose_ds, 
         train_kwargs={"transform": train_transform},
         val_kwargs={"transform": val_transform},

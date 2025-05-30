@@ -417,7 +417,7 @@ class DavidsdataDocked(InMemoryDataset):
         # Define the number of parallel processes to use
         n_jobs = os.cpu_count()
         print(f"Number of available CPU cores: {n_jobs}")
-        n_jobs = min(n_jobs, 16)
+        n_jobs = min(n_jobs, 8)
 
 
         # Parallelize the processing of items
