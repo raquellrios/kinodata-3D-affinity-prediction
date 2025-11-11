@@ -31,6 +31,10 @@ kinodata/training/experiment_checkpoints*
 kinodata/training/steep_wa*
 kinodata/training/restart*
 kinodata/training/*.sh
+kinodata/training/*.csv
+kinodata/training/*restart*
+kinodata/training/*newcuda*
+kinodata/training/*png
 kinodata/model/regression_og_may24.py
 kinodata/data/data_module_bkups
 kiondata/data/data_module_og_may.py
