@@ -1,18 +1,17 @@
 from pathlib import Path
 from functools import singledispatchmethod
-from typing import List, Optional, Protocol
+from typing import List, Optional, Iterable, Tuple, Protocol
 import numpy as np
 from numpy.random import default_rng
 from sklearn.model_selection import GroupKFold, KFold
 import pandas as pd
 
-from .data_split import Split
-from .utils.cluster import AffinityPropagation
-from .utils.similarity import BLOSUMSubstitutionSimilarity
-from .dataset import KinodataDocked
-from .dataset_davids_data import DavidsdataDocked
+from kinodata.data.data_split import Split
+from kinodata.data.utils.cluster import AffinityPropagation
+from kinodata.data.utils.similarity import BLOSUMSubstitutionSimilarity
+from kinodata.data.dataset import KinodataDocked
+from kinodata.data.dataset_davids_data import DavidsdataDocked
 from collections import Counter
-
 from itertools import islice
 
 def _first_n(it, n=5):
@@ -110,68 +109,63 @@ def limit_scaffold_representation(group_index, max_samples_per_scaffold):
     
     return np.array(filtered_indices)
 
+def _as_indices(mask_or_idx: np.ndarray, n: int) -> np.ndarray:
+    """Normalize boolean mask or integer indices to integer indices."""
+    mask_or_idx = np.asarray(mask_or_idx)
+    if mask_or_idx.dtype == bool:
+        if mask_or_idx.shape[0] != n:
+            raise ValueError("Boolean mask length does not match array length.")
+        return np.nonzero(mask_or_idx)[0]
+    return mask_or_idx.astype(np.int64, copy=False)
 
-#def group_k_fold_split(
-#    group_index: np.ndarray,
-#    k: int,
-#) -> List[Split]:
-#    
-#    print("inside the group_k_fold_split")
-#    print("group index is ")
-#    print(group_index)
-#    print("the len of group index is " +str(group_index.shape[0]))
-#    group_k_fold = GroupKFold(k)
-#    _X = np.zeros((group_index.shape[0], 1))
-#    generator = group_k_fold.split(_X, groups=group_index)
-#    return _generator_to_list(generator)
+def _generator_to_list(generator: Iterable[Tuple[np.ndarray, np.ndarray]]) -> List["Split"]:
+    # unchanged behavior: uses given indices as-is
+    return [Split(train_index, *_split_random(test_index, 0.5))  # type: ignore
+            for train_index, test_index in generator]
 
 def group_k_fold_split(
     group_index: np.ndarray,
     k: int,
     max_samples_per_scaffold: Optional[int] = None,
-) -> List[Split]:
+) -> List["Split"]:
     """
-    Custom GroupKFold split with optional filtering of overrepresented scaffolds.
-
-    Args:
-        group_index (np.ndarray): Array of scaffold identifiers.
-        k (int): Number of folds.
-        max_samples_per_scaffold (int, optional): Max samples per scaffold. Default is None.
-
-    Returns:
-        List[Split]: Splits for training, validation, and test.
+    GroupKFold splits with optional downsampling of overrepresented scaffolds.
+    Returns global indices so they map to the original dataset.
     """
-    #print("group indices before filtered")
-    #print(group_index[:5])
-    #print("group index shape before filtering "+str(np.shape(group_index)))
+    group_index = np.asarray(group_index).ravel()
+    n = group_index.shape[0]
+    global_idx = np.arange(n)
+
+    # Optional filtering: compute a view into the original dataset
     if max_samples_per_scaffold is not None:
-        filtered_indices = limit_scaffold_representation(group_index, max_samples_per_scaffold)
-        group_index = group_index[filtered_indices]
-        #print("group indices after filtered")
-        #print(group_index[:5])
-        #print("group index shape after filtering "+str(np.shape(group_index)))
-   
-    group_k_fold = GroupKFold(k)
-    _X = np.zeros((group_index.shape[0], 1))
-    generator = group_k_fold.split(_X, groups=group_index)
-    #return _generator_to_list(generator)
-    splits = []
-    for train_idx, test_idx in generator:
-        train_global = filtered_indices[train_idx]
-        test_global = filtered_indices[test_idx]
+        keep = limit_scaffold_representation(group_index, max_samples_per_scaffold)
+        keep = _as_indices(np.asarray(keep), n)
+        group_index_f = group_index[keep]
+        global_idx = global_idx[keep]
+    else:
+        group_index_f = group_index  # no filtering
 
-        # Further split the test set into validation and test
-        val_idx, test_idx = _split_random(test_global, 0.5)  # Adjust as needed
-        splits.append(Split(train_global, val_idx, test_idx))
+    # Safety: GroupKFold requires at least k unique groups
+    n_unique = np.unique(group_index_f).size
+    if k > n_unique:
+        raise ValueError(f"k={k} is larger than number of unique groups ({n_unique}).")
 
-    return splits
+    # Fit GroupKFold on the (possibly) filtered view
+    gkf = GroupKFold(n_splits=k)
+    _X = np.zeros((group_index_f.shape[0], 1))
+    gen = gkf.split(_X, groups=group_index_f)
+
+    # Map fold indices back to original/global indices before producing Split objects
+    mapped_gen = ((global_idx[tr], global_idx[te]) for tr, te in gen)
+    return _generator_to_list(mapped_gen)
 
 
 
-def random_k_fold_split(data_index: np.ndarray, k: int) -> List[Split]:
-    k_fold = KFold(k, shuffle=True)
-    generator = k_fold.split(data_index)
-    return _generator_to_list(generator)
+
+#def random_k_fold_split(data_index: np.ndarray, k: int) -> List[Split]:
+#    k_fold = KFold(k, shuffle=True)
+#    generator = k_fold.split(data_index)
+#    return _generator_to_list(generator)
 
 
 class KinodataKFoldSplit:
@@ -242,26 +236,26 @@ class KinodataKFoldSplit:
             
             return splits
 
-        if self.split_type == "pocket-k-fold":
-            pocket_data = pd.DataFrame(
-                {
-                    "index": np.arange(len(dataset.data.pocket_sequence)),
-                    "pocket_sequence": dataset.data.pocket_sequence,
-                }
-            )
-            df_cluster_labels = self.pocket_clustering(
-                pocket_data,
-                "pocket_sequence",
-                fn_similarity=self.pocket_similarity_measure(),
-            ).sort_values(by="index", ascending=True)
-            assert df_cluster_labels.shape[0] == pocket_data.shape[0]
-            return group_k_fold_split(
-                np.array(df_cluster_labels[self.pocket_clustering.cluster_key].values),
-                k=self.k,
-            )
-        if self.split_type == "random-k-fold":
-            idents = [data.ident for data in dataset]
-            return random_k_fold_split(idents, self.k)
+        #if self.split_type == "pocket-k-fold":
+        #    pocket_data = pd.DataFrame(
+        #        {
+        #            "index": np.arange(len(dataset.data.pocket_sequence)),
+        #            "pocket_sequence": dataset.data.pocket_sequence,
+        #        }
+        #    )
+        #    df_cluster_labels = self.pocket_clustering(
+        #        pocket_data,
+        #        "pocket_sequence",
+        #        fn_similarity=self.pocket_similarity_measure(),
+        #    ).sort_values(by="index", ascending=True)
+        #    assert df_cluster_labels.shape[0] == pocket_data.shape[0]
+        #    return group_k_fold_split(
+        #        np.array(df_cluster_labels[self.pocket_clustering.cluster_key].values),
+        #        k=self.k,
+        #    )
+        #if self.split_type == "random-k-fold":
+        #    idents = [data.ident for data in dataset]
+        #    return random_k_fold_split(idents, self.k)
 
         #def split(self, dataset: KinodataDocked) -> List[Split]:
     def split(self, dataset) -> List[Split]:

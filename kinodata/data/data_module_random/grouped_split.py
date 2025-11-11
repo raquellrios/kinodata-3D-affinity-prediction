@@ -6,11 +6,11 @@ from numpy.random import default_rng
 from sklearn.model_selection import GroupKFold, KFold
 import pandas as pd
 
-from .data_split import Split
-from .utils.cluster import AffinityPropagation
-from .utils.similarity import BLOSUMSubstitutionSimilarity
-from .dataset import KinodataDocked
-from .dataset_davids_data import DavidsdataDocked
+from kinodata.data.data_split import Split
+from kinodata.data.utils.cluster import AffinityPropagation
+from kinodata.data.utils.similarity import BLOSUMSubstitutionSimilarity
+from kinodata.data.dataset import KinodataDocked
+from kinodata.data.dataset_davids_data import DavidsdataDocked
 from collections import Counter
 
 def _print_scaffold_stats_per_fold(scaffolds: np.ndarray,

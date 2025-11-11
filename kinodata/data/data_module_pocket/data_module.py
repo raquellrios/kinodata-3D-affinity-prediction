@@ -3,6 +3,7 @@ from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from kinodata.data.grouped_split import cap_split_by_max_share
 
 import pandas as pd
 import numpy as np
@@ -11,9 +12,12 @@ from torch_geometric.data.lightning_datamodule import LightningDataset
 #from torch_geometric.loader.dataloader import DataLoader
 from torch_geometric.transforms import Compose
 
+import matplotlib.pyplot as plt
+
 from kinodata.configuration import Config
 from kinodata.data.data_split import Split
-from kinodata.data.grouped_split import KinodataKFoldSplit
+from kinodata.data.data_module_pocket.grouped_split import KinodataKFoldSplit
+from kinodata.data.data_module_pocket.grouped_split import _cluster_pockets_union, pocket_overlap_report, uniq_pockets
 from sklearn.preprocessing import StandardScaler
 #from kinodata.data.grouped_split import print_scaffolds_in_splits, save_scaffolds_to_csv, count_scaffold_distribution, visualise_scaffold_overlap
 
@@ -37,8 +41,6 @@ from pytorch_lightning.utilities.combined_loader import CombinedLoader
 from torch_geometric.data import Batch
 import pytorch_lightning as pl
 
-from kinodata.data.utils.scaffold_overlap import summarize_overlap, pretty_print
-
 
 Kwargs = Dict[str, Any]
 
@@ -53,6 +55,25 @@ def assert_unique_value(key: str, *kwarg_dicts: Optional[Kwargs], msg: str = "")
             values.append(kwarg_dict[key])
     assert len(set(values)) <= 1, msg
 
+def save_joint_folds(dual_folds, out_dir: Path):
+    """
+    Save one CSV per fold. Each CSV has 6 columns:
+      act_train, act_val, act_test, pose_train, pose_val, pose_test
+    Each row corresponds to one index (NaN if shorter).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for i, dual in enumerate(dual_folds):
+        df = pd.DataFrame({
+            "act_train": dual.activity.train_split,
+            "act_val":   dual.activity.val_split,
+            "act_test":  dual.activity.test_split,
+            "pose_train": dual.pose.train_split,
+            "pose_val":   dual.pose.val_split,
+            "pose_test":  dual.pose.test_split,
+        })
+        df.to_csv(out_dir / f"fold{i}.csv", index=False)
+        print(f"[joint split] wrote {out_dir / f'fold{i}.csv'}")
+
 
 
 def make_data_module(
@@ -66,6 +87,7 @@ def make_data_module(
     test_kwargs: Optional[Kwargs] = None,
     one_time_transform: Optional[Callable[[InMemoryDataset], InMemoryDataset]] = None,
     normalization: bool = False,
+    #pose_plot: bool = False,
     **kwargs,
     ) -> LightningDataset:
 
@@ -88,6 +110,28 @@ def make_data_module(
     train_dataset.transform = (train_kwargs or {}).get("transform")
     val_dataset.transform   = (val_kwargs   or {}).get("transform")
     test_dataset.transform  = (test_kwargs  or {}).get("transform")
+
+    #def rmsd_to_prob_transform(c, x, pose_rmsd):
+
+        #prob_pose = 1 / (1 + torch.exp( c * (pose_rmsd - x)))
+
+        #return prob_pose
+
+    #if pose_plot is not None:
+
+        #rmsd_train=torch.stack([d.predicted_rmsd for d in train_dataset])
+        #rmsd_transform_vals = [(1.25, 6),(1.25, 4.5), (1.3, 5), (0.7, 5.4)]
+
+        #for item in rmsd_transform_vals:
+            #rmsd_plot = rmsd_to_prob_transform(item[0], item[1], rmsd_train)
+
+            #plt.hist(rmsd_plot, bins=10)
+            #plt.xlabel('RMSD bin')
+            #plt.ylabel("Count")
+            #plt.savefig(f"/data1/choderaj/lopezrr/kinodata-3D-affinity-prediction/kinodata/training/transformation_{item[0]}_{item[1]}.png", dpi=300)
+            #plt.close()
+
+
 
     if normalization and train_dataset is not None:
         
@@ -225,6 +269,12 @@ def make_kinodata_module(
     pose_ds = poseCls()
     activity_ds = activityCls()
   
+    #activity_plot_df = pd.DataFrame({
+    #     "activity": KinodataDocked.y
+    #     })
+
+    #activity_plot_df.to_csv(f"activity_plot_df.csv", index=False)
+
     #print(type(config))
     #print("above is the type of config")
     #
@@ -270,6 +320,18 @@ def make_kinodata_module(
     print(f"Training transforms: {train_transform}")
     val_transform = compose(transforms)
 
+    #def get_split(raw):
+    #    if config.data_split:
+    #        sp = load_precomputed_split(config)
+    #        return sp.remap_index(raw.ident_index_map())
+    #    else:
+    #        splits = KinodataKFoldSplit(config.split_type, config.k_fold).split(raw)
+    #        return splits[config.split_index]
+
+    #split_act = get_split(activity_ds)
+    
+    #split_pose = get_split(pose_ds)
+
     def get_split(raw):
         if config.data_split:
             sp = load_precomputed_split(config)
@@ -277,29 +339,91 @@ def make_kinodata_module(
         else:
             splits = KinodataKFoldSplit(config.split_type, config.k_fold).split(raw)
             return splits[config.split_index]
+
+    # OLD:
+    # split_act = get_split(activity_ds)
+    # split_pose = get_split(pose_ds)
+
+    # NEW:
+    if config.split_type == "pocket-k-fold" and getattr(config, "sync_pocket_splits", True):
+
+
+        # Strict joint eval by default (no leakage)
+        from kinodata.data.grouped_split import joint_pocket_kfold_split  # ensure import path
+        dual_folds, act_groups, pose_groups = joint_pocket_kfold_split(
+            activity_ds,
+            pose_ds,
+            k=config.k_fold,
+            inner_val_frac=0.5,  # keep behavior
+            max_samples_per_pocket=getattr(config, "max_samples_per_pocket", None),
+            seed=getattr(config, "split_seed", 0),
+        )
+        dual = dual_folds[config.split_index]
+        split_act, split_pose = dual.activity, dual.pose
+
+        seed = getattr(config, "split_seed", 0)
+
         
 
-    # Extract scaffolds
-    activity_scaffolds = set(data.scaffold for data in activity_ds)
-    pose_scaffolds = set(data.scaffold for data in pose_ds)
+        split_act = cap_split_by_max_share(
+        split_act, act_groups,
+        max_share=getattr(config, "cap_share_activity", 0.1),
+        min_cap=getattr(config, "cap_min_activity", 800),
+        max_cap=getattr(config, "cap_max_activity", None),
+        seed=seed,
+        )
 
-    # Compute overlap stats
-    union_scaffolds = activity_scaffolds | pose_scaffolds
-    intersection_scaffolds = activity_scaffolds & pose_scaffolds
+        split_pose = cap_split_by_max_share(
+        split_pose, pose_groups,
+        max_share=getattr(config, "cap_share_pose", 0.1),
+        min_cap=getattr(config, "cap_min_pose", 500),
+        max_cap=getattr(config, "cap_max_pose", None),
+        seed=seed,
+        )
 
-    print("=== Overall Scaffold Overlap ===")
-    print(f"Activity scaffolds: {len(activity_scaffolds)}")
-    print(f"Pose scaffolds:     {len(pose_scaffolds)}")
-    print(f"Union:              {len(union_scaffolds)}")
-    print(f"Intersection:       {len(intersection_scaffolds)}")
-    print(f"Jaccard:            {len(intersection_scaffolds) / len(union_scaffolds):.4f}")
+        
+        pocket_overlap_report(act_groups, pose_groups, tag="GLOBAL")
 
-    split_act = get_split(activity_ds)
-    split_pose = get_split(pose_ds)
+        A_tr, A_va, A_te = uniq_pockets(act_groups, split_act.train_split), uniq_pockets(act_groups, split_act.val_split), uniq_pockets(act_groups, split_act.test_split)
+        P_tr, P_va, P_te = uniq_pockets(pose_groups, split_pose.train_split), uniq_pockets(pose_groups, split_pose.val_split), uniq_pockets(pose_groups, split_pose.test_split)
 
-    print("\n=== Scaffold overlap report (current independent splits) ===")
-    overlap = summarize_overlap(activity_ds, pose_ds, split_act, split_pose)
-    pretty_print(overlap)
+        print("[activity] |train|", len(A_tr), "|val|", len(A_va), "|test|", len(A_te))
+        print("[pose]     |train|", len(P_tr), "|val|", len(P_va), "|test|", len(P_te))
+
+        # Safety: no train↔(val∪test) leakage per task
+        assert not (A_tr & (A_va | A_te)), "Leakage in activity splits"
+        assert not (P_tr & (P_va | P_te)), "Leakage in pose splits"
+
+        # (Optional) Inspect how aligned train pockets are across tasks
+        print("train pocket overlap (act ∩ pose):", len(A_tr & P_tr), " / union:", len(A_tr | P_tr))
+
+        # After computing act_groups, pose_groups, and dual_folds
+        from kinodata.data.grouped_split import DualSplit, pocket_count_table_all_folds, print_top_pockets, pocket_count_table_for_split
+
+        #dual_folds_capped = list(dual_folds)
+        #dual_folds_capped[config.split_index] = DualSplit(activity=split_act, pose=split_pose)
+
+        this_fold = pd.concat([
+        pocket_count_table_for_split(act_groups,  split_act,  config.split_index, "activity"),
+        pocket_count_table_for_split(pose_groups, split_pose, config.split_index, "pose"),
+        ], ignore_index=True)
+
+
+        #summary = pocket_count_table_all_folds(act_groups, pose_groups, dual_folds_capped)
+        print_top_pockets(this_fold, top_k=5)
+
+
+        
+    else:
+        split_act  = get_split(activity_ds)
+        split_pose = get_split(pose_ds)
+
+
+    activity_plot_df = pd.DataFrame({
+         "activity": split_act.train.y
+         })
+
+    activity_plot_df.to_csv(f"activity_plot_df.csv", index=False)
 
     print(f"Split kinodata: Train size {split_act.train_size}, Val size {split_act.val_size}, Test size {split_act.test_size}")
     print(f"Split kinodocked: Train size {split_pose.train_size}, Val size {split_pose.val_size}, Test size {split_pose.test_size}")
@@ -317,7 +441,8 @@ def make_kinodata_module(
         val_kwargs={"transform": val_transform},
         test_kwargs={"transform": val_transform}, #is this okay?
         one_time_transform=one_time_transform,
-        normalization=True
+        normalization=True, 
+        #pose_plot = False
     )
 
     data_module_2 = make_data_module(
@@ -329,6 +454,7 @@ def make_kinodata_module(
         val_kwargs={"transform": val_transform},
         test_kwargs={"transform": val_transform}, #is this okay?
         one_time_transform=one_time_transform,
+        #pose_plot=True
     )
 
     # Combine both data modules

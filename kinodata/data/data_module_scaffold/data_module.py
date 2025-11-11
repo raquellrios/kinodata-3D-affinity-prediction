@@ -3,6 +3,7 @@ from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from collections import defaultdict
 
 import pandas as pd
 import numpy as np
@@ -13,9 +14,9 @@ from torch_geometric.transforms import Compose
 
 from kinodata.configuration import Config
 from kinodata.data.data_split import Split
-from kinodata.data.grouped_split import KinodataKFoldSplit
+from kinodata.data.data_module_scaffold.grouped_split import KinodataKFoldSplit
 from sklearn.preprocessing import StandardScaler
-from kinodata.data.grouped_split import unified_scaffold_splits
+#from kinodata.data.grouped_split import unified_scaffold_splits
 #from kinodata.data.grouped_split import print_scaffolds_in_splits, save_scaffolds_to_csv, count_scaffold_distribution, visualise_scaffold_overlap
 
 from kinodata.data.dataset import (
@@ -130,19 +131,43 @@ def make_joint_scaffold_splits(
     train_scaffolds = set(train_scaffolds)
 
     # --- 6) Map scaffold sets back to per-dataset indices ---
-    def select_indices(scaff_all, idx_all, which: set[str]):
-        mask = np.array([s in which for s in scaff_all[idx_all]], dtype=bool)
-        return idx_all[mask]
+    def _select_from_kept(scaff_all: np.ndarray,
+                      kept_idx: np.ndarray,
+                      which_scaffolds: set,
+                      cap_per_scaffold: int | None = None) -> np.ndarray:
+        """
+        Return indices limited to (a) items in kept_idx AND (b) items whose scaffold ∈ which_scaffolds.
+        If cap_per_scaffold is given, also cap within this split.
+        """
+        if len(kept_idx) == 0:
+            return kept_idx
 
-    # Activity indices per split:
-    act_train_idx = select_indices(scaff_act, idx_act,  train_scaffolds)
-    act_val_idx   = select_indices(scaff_act, idx_act,  val_scaffolds)
-    act_test_idx  = select_indices(scaff_act, idx_act,  test_scaffolds)
+        # filter kept items by scaffold set
+        mask = np.array([s in which_scaffolds for s in scaff_all[kept_idx]], dtype=bool)
+        sel = kept_idx[mask]
+        if cap_per_scaffold is None:
+            return sel
+
+        # enforce per-scaffold cap within this split
+        buckets = defaultdict(list)
+        for i in sel:
+            buckets[scaff_all[i]].append(i)
+        out = []
+        for s, ids in buckets.items():
+            out.extend(ids[:cap_per_scaffold])
+        return np.array(out, dtype=int)
+
+
+    # Activity indices per split (use kept lists; cap again within split if you want):
+    act_train_idx = _select_from_kept(scaff_act, keep_act,  train_scaffolds,  max_samples_per_scaffold_activity)
+    act_val_idx   = _select_from_kept(scaff_act, keep_act,  val_scaffolds,    max_samples_per_scaffold_activity)
+    act_test_idx  = _select_from_kept(scaff_act, keep_act,  test_scaffolds,   max_samples_per_scaffold_activity)
 
     # Pose indices per split:
-    pose_train_idx = select_indices(scaff_pose, idx_pose, train_scaffolds)
-    pose_val_idx   = select_indices(scaff_pose, idx_pose, val_scaffolds)
-    pose_test_idx  = select_indices(scaff_pose, idx_pose, test_scaffolds)
+    pose_train_idx = _select_from_kept(scaff_pose, keep_pose, train_scaffolds, max_samples_per_scaffold_pose)
+    pose_val_idx   = _select_from_kept(scaff_pose, keep_pose, val_scaffolds,   max_samples_per_scaffold_pose)
+    pose_test_idx  = _select_from_kept(scaff_pose, keep_pose, test_scaffolds,  max_samples_per_scaffold_pose)
+
 
     # --- 7) Build Split objects ---
     split_act  = Split(act_train_idx,  act_val_idx,  act_test_idx)
@@ -505,6 +530,15 @@ def make_kinodata_module(
 
     #split_act = get_split(activity_ds)
     #split_pose = get_split(pose_ds)
+    
+    #activity_plot_df = pd.DataFrame({
+    #     "activity": activity_ds.activity
+    #     })
+
+    #activity_plot_df.to_csv(f"activity_plot_df.csv", index=False)
+
+
+
 
     split_act, split_pose = make_joint_scaffold_splits(
     activity_ds,
@@ -526,6 +560,52 @@ def make_kinodata_module(
 
     #max_samps = getattr(config, "max_samples_per_scaffold", 1000)
     #max_samps = getattr(config, "max_samples_per_scaffold", None)
+
+    ### saving smiles of molecules
+    act_smiles = [data.smiles for data in activity_ds]
+    act_smiles_train = [act_smiles[i] for i in split_act.train_split]
+    act_smiles_val = [act_smiles[i] for i in split_act.val_split]
+    act_smiles_test = [act_smiles[i] for i in split_act.test_split]
+    print(f"the len of the train act smiles is {len(act_smiles_train)}")
+    act_scaffold = [data.scaffold for data in activity_ds]
+    act_scaffold_train = [act_scaffold[i] for i in split_act.train_split]
+    act_scaffold_val = [act_scaffold[i] for i in split_act.val_split]
+    act_scaffold_test = [act_scaffold[i] for i in split_act.test_split]
+    print(f"the len of the train act scaffold is {len(act_scaffold_train)}")
+
+    pose_smiles = [data.smiles for data in pose_ds]
+    pose_smiles_train = [pose_smiles[i] for i in split_pose.train_split]
+    pose_smiles_val = [pose_smiles[i] for i in split_pose.val_split]
+    pose_smiles_test = [pose_smiles[i] for i in split_pose.test_split]
+    print(f"the len of the train pose smiles is {len(pose_smiles_train)}")
+    pose_scaffold = [data.scaffold for data in pose_ds]
+    pose_scaffold_train = [pose_scaffold[i] for i in split_pose.train_split]
+    pose_scaffold_val = [pose_scaffold[i] for i in split_pose.val_split]
+    pose_scaffold_test = [pose_scaffold[i] for i in split_pose.test_split]
+    print(f"the len of the train act scaffold is {len(pose_scaffold_train)}")
+
+
+    #saving the smiles and scaffolds for further analysis
+    # Activity SMILES
+    activity_df = pd.DataFrame({
+         "split": (["train"] * len(act_smiles_train) +
+              ["val"] * len(act_smiles_val) +
+              ["test"] * len(act_smiles_test)),
+         "smiles": act_smiles_train + act_smiles_val + act_smiles_test, 
+         "scaffold": act_scaffold_train + act_scaffold_val + act_scaffold_test
+         })
+
+    activity_df.to_csv(f"activity_smiles_split_{config.split_index}.csv", index=False)
+    
+    pose_df = pd.DataFrame({
+         "split": (["train"] * len(pose_smiles_train) +
+              ["val"] * len(pose_smiles_val) +
+              ["test"] * len(pose_smiles_test)),
+         "smiles": pose_smiles_train + pose_smiles_val + pose_smiles_test,
+         "scaffold": pose_scaffold_train + pose_scaffold_val + pose_scaffold_test
+         })
+
+    pose_df.to_csv(f"pose_smiles_split_{config.split_index}.csv", index=False)
     
     print(f"Split kinodata: Train size {split_act.train_size}, Val size {split_act.val_size}, Test size {split_act.test_size}")
     print(f"Split kinodocked: Train size {split_pose.train_size}, Val size {split_pose.val_size}, Test size {split_pose.test_size}")

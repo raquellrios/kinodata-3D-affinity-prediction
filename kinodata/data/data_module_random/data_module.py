@@ -13,7 +13,7 @@ from torch_geometric.transforms import Compose
 
 from kinodata.configuration import Config
 from kinodata.data.data_split import Split
-from kinodata.data.grouped_split import KinodataKFoldSplit
+from kinodata.data.data_module_random.grouped_split import KinodataKFoldSplit
 from sklearn.preprocessing import StandardScaler
 #from kinodata.data.grouped_split import print_scaffolds_in_splits, save_scaffolds_to_csv, count_scaffold_distribution, visualise_scaffold_overlap
 
@@ -300,6 +300,53 @@ def make_kinodata_module(
     print("\n=== Scaffold overlap report (current independent splits) ===")
     overlap = summarize_overlap(activity_ds, pose_ds, split_act, split_pose)
     pretty_print(overlap)
+
+    ### saving smiles of molecules
+    act_smiles = [data.smiles for data in activity_ds]
+    act_smiles_train = [act_smiles[i] for i in split_act.train_split]
+    act_smiles_val = [act_smiles[i] for i in split_act.val_split]
+    act_smiles_test = [act_smiles[i] for i in split_act.test_split]
+    print(f"the len of the train act smiles is {len(act_smiles_train)}")
+    act_scaffold = [data.scaffold for data in activity_ds]
+    act_scaffold_train = [act_scaffold[i] for i in split_act.train_split]
+    act_scaffold_val = [act_scaffold[i] for i in split_act.val_split]
+    act_scaffold_test = [act_scaffold[i] for i in split_act.test_split]
+    print(f"the len of the train act scaffold is {len(act_scaffold_train)}")
+
+    pose_smiles = [data.smiles for data in pose_ds]
+    pose_smiles_train = [pose_smiles[i] for i in split_pose.train_split]
+    pose_smiles_val = [pose_smiles[i] for i in split_pose.val_split]
+    pose_smiles_test = [pose_smiles[i] for i in split_pose.test_split]
+    print(f"the len of the train pose smiles is {len(pose_smiles_train)}")
+    pose_scaffold = [data.scaffold for data in pose_ds]
+    pose_scaffold_train = [pose_scaffold[i] for i in split_pose.train_split]
+    pose_scaffold_val = [pose_scaffold[i] for i in split_pose.val_split]
+    pose_scaffold_test = [pose_scaffold[i] for i in split_pose.test_split]
+    print(f"the len of the train act scaffold is {len(pose_scaffold_train)}")
+
+
+    #saving the smiles and scaffolds for further analysis
+    # Activity SMILES
+    activity_df = pd.DataFrame({
+         "split": (["train"] * len(act_smiles_train) +
+              ["val"] * len(act_smiles_val) +
+              ["test"] * len(act_smiles_test)),
+         "smiles": act_smiles_train + act_smiles_val + act_smiles_test, 
+         "scaffold": act_scaffold_train + act_scaffold_val + act_scaffold_test
+         })
+
+    activity_df.to_csv(f"activity_smiles_split_{config.split_index}.csv", index=False)
+    
+    pose_df = pd.DataFrame({
+         "split": (["train"] * len(pose_smiles_train) +
+              ["val"] * len(pose_smiles_val) +
+              ["test"] * len(pose_smiles_test)),
+         "smiles": pose_smiles_train + pose_smiles_val + pose_smiles_test,
+         "scaffold": pose_scaffold_train + pose_scaffold_val + pose_scaffold_test
+         })
+
+    pose_df.to_csv(f"pose_smiles_split_{config.split_index}.csv", index=False)
+
 
     print(f"Split kinodata: Train size {split_act.train_size}, Val size {split_act.val_size}, Test size {split_act.test_size}")
     print(f"Split kinodocked: Train size {split_pose.train_size}, Val size {split_pose.val_size}, Test size {split_pose.test_size}")
