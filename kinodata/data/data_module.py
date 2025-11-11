@@ -3,6 +3,7 @@ from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from collections import defaultdict
 
 import pandas as pd
 import numpy as np
@@ -15,6 +16,7 @@ from kinodata.configuration import Config
 from kinodata.data.data_split import Split
 from kinodata.data.grouped_split import KinodataKFoldSplit
 from sklearn.preprocessing import StandardScaler
+#from kinodata.data.grouped_split import unified_scaffold_splits
 #from kinodata.data.grouped_split import print_scaffolds_in_splits, save_scaffolds_to_csv, count_scaffold_distribution, visualise_scaffold_overlap
 
 from kinodata.data.dataset import (
@@ -37,8 +39,258 @@ from pytorch_lightning.utilities.combined_loader import CombinedLoader
 from torch_geometric.data import Batch
 import pytorch_lightning as pl
 
+from rdkit import Chem
+from rdkit.Chem import Descriptors
+import os
+
 
 Kwargs = Dict[str, Any]
+
+import numpy as np
+from numpy.random import default_rng
+from sklearn.model_selection import GroupKFold
+from typing import Tuple
+
+def make_joint_scaffold_splits(
+    activity_ds,
+    pose_ds,
+    k: int,
+    split_index: int = 0,
+    val_frac: float = 0.5,
+    seed: int = 0,
+    max_samples_per_scaffold_activity: int | None = None,
+    max_samples_per_scaffold_pose: int | None = None,
+):
+    """
+    Build ONE scaffold-based K-fold partition over the UNION of both datasets,
+    then derive per-dataset splits by selecting items whose scaffold belongs to
+    the train/val/test group sets for the chosen fold.
+
+    Returns
+    -------
+    split_act, split_pose : Split
+        Two Split objects (one for activity, one for pose) that are aligned.
+    """
+
+    # --- 1) Collect scaffolds and "local indices" for each dataset ---
+    scaff_act = np.array([activity_ds[i].scaffold for i in range(len(activity_ds))], dtype=object)
+    scaff_pose = np.array([pose_ds[i].scaffold     for i in range(len(pose_ds))],     dtype=object)
+
+    idx_act   = np.arange(len(activity_ds))
+    idx_pose  = np.arange(len(pose_ds))
+
+    # --- 2) (Optional) cap samples per scaffold per dataset to de-overrepresent huge groups ---
+    def cap_per_scaffold(scaff, idx, cap):
+        if cap is None:
+            return idx
+        keep = []
+        # group by scaffold
+        from collections import defaultdict
+        bucket = defaultdict(list)
+        for i, s in zip(idx, scaff[idx]):
+            bucket[s].append(i)
+        for s, ids in bucket.items():
+            keep.extend(ids[:cap])
+        return np.array(keep, dtype=int)
+
+    keep_act  = cap_per_scaffold(scaff_act, idx_act,  max_samples_per_scaffold_activity)
+    keep_pose = cap_per_scaffold(scaff_pose, idx_pose, max_samples_per_scaffold_pose)
+
+    # Use possibly-reduced sets for building the joint fold
+    scaff_act_kept  = scaff_act[keep_act]
+    scaff_pose_kept = scaff_pose[keep_pose]
+
+    # --- 3) Build the joint table used for folding ---
+    # We concatenate samples from both datasets; GroupKFold will respect the scaffold groups.
+    joint_scaffolds = np.concatenate([scaff_act_kept, scaff_pose_kept])
+    # We also keep track of the origin and original indices so we can map back:
+    src_flags = np.concatenate([
+        np.zeros_like(scaff_act_kept, dtype=np.int8),  # 0 = activity
+        np.ones_like(scaff_pose_kept, dtype=np.int8),  # 1 = pose
+    ])
+    src_local_idx = np.concatenate([keep_act, keep_pose])
+
+    # --- 4) Outer scaffold K-fold on the joint samples ---
+    gkf = GroupKFold(n_splits=k)
+    X_dummy = np.zeros((len(joint_scaffolds), 1))
+    folds = list(gkf.split(X_dummy, groups=joint_scaffolds))
+    assert 0 <= split_index < k, f"split_index must be in [0,{k-1}]"
+
+    train_mask, heldout_mask = folds[split_index]
+
+    # Unique scaffold sets for the chosen outer fold:
+    heldout_scaffolds = np.unique(joint_scaffolds[heldout_mask])
+    train_scaffolds   = np.unique(joint_scaffolds[train_mask])
+
+    # --- 5) Split the heldout scaffolds into val/test (by scaffold) ---
+    rng = default_rng(seed)
+    perm = rng.permutation(len(heldout_scaffolds))
+    pivot = int(len(heldout_scaffolds) * val_frac)
+    val_scaffolds  = set(heldout_scaffolds[perm[:pivot]])
+    test_scaffolds = set(heldout_scaffolds[perm[pivot:]])
+    train_scaffolds = set(train_scaffolds)
+
+    # --- 6) Map scaffold sets back to per-dataset indices ---
+    def _select_from_kept(scaff_all: np.ndarray,
+                      kept_idx: np.ndarray,
+                      which_scaffolds: set,
+                      cap_per_scaffold: int | None = None) -> np.ndarray:
+        """
+        Return indices limited to (a) items in kept_idx AND (b) items whose scaffold ∈ which_scaffolds.
+        If cap_per_scaffold is given, also cap within this split.
+        """
+        if len(kept_idx) == 0:
+            return kept_idx
+
+        # filter kept items by scaffold set
+        mask = np.array([s in which_scaffolds for s in scaff_all[kept_idx]], dtype=bool)
+        sel = kept_idx[mask]
+        if cap_per_scaffold is None:
+            return sel
+
+        # enforce per-scaffold cap within this split
+        buckets = defaultdict(list)
+        for i in sel:
+            buckets[scaff_all[i]].append(i)
+        out = []
+        for s, ids in buckets.items():
+            out.extend(ids[:cap_per_scaffold])
+        return np.array(out, dtype=int)
+
+
+    # Activity indices per split (use kept lists; cap again within split if you want):
+    act_train_idx = _select_from_kept(scaff_act, keep_act,  train_scaffolds,  max_samples_per_scaffold_activity)
+    act_val_idx   = _select_from_kept(scaff_act, keep_act,  val_scaffolds,    max_samples_per_scaffold_activity)
+    act_test_idx  = _select_from_kept(scaff_act, keep_act,  test_scaffolds,   max_samples_per_scaffold_activity)
+
+    # Pose indices per split:
+    pose_train_idx = _select_from_kept(scaff_pose, keep_pose, train_scaffolds, max_samples_per_scaffold_pose)
+    pose_val_idx   = _select_from_kept(scaff_pose, keep_pose, val_scaffolds,   max_samples_per_scaffold_pose)
+    pose_test_idx  = _select_from_kept(scaff_pose, keep_pose, test_scaffolds,  max_samples_per_scaffold_pose)
+
+
+    # --- 7) Build Split objects ---
+    split_act  = Split(act_train_idx,  act_val_idx,  act_test_idx)
+    split_pose = Split(pose_train_idx, pose_val_idx, pose_test_idx)
+
+    # --- 8) (Optional) quick summary + overlap checks ---
+    def summarize(tag, ds_scaff, tr, va, te):
+        def nuniq(ix): return len(set(ds_scaff[i] for i in ix))
+        def largest(ix):
+            from collections import Counter
+            c = Counter(ds_scaff[i] for i in ix)
+            return c.most_common(1)[0][1] if c else 0
+        print(f"[joint-scaffold] {tag}")
+        print(f"  train: {nuniq(tr):4d} scaffolds, {len(tr):5d} mols (largest={largest(tr)})")
+        print(f"  val  : {nuniq(va):4d} scaffolds, {len(va):5d} mols (largest={largest(va)})")
+        print(f"  test : {nuniq(te):4d} scaffolds, {len(te):5d} mols (largest={largest(te)})")
+
+    summarize("activity",
+              scaff_act, act_train_idx, act_val_idx, act_test_idx)
+    summarize("pose",
+              scaff_pose, pose_train_idx, pose_val_idx, pose_test_idx)
+
+    # Overlap of pose vs activity (per split), relative to pose:
+    def overlap_ratio(pose_ix, act_ix, scaff_pose_all, scaff_act_all, name):
+        pose_sc = set(scaff_pose_all[i] for i in pose_ix)
+        act_sc  = set(scaff_act_all[i] for i in act_ix)
+        inter = pose_sc & act_sc
+        den = len(pose_sc) if pose_sc else 1
+        print(f"  [{name}] pose scaffolds: {len(pose_sc)}, overlap with activity: {len(inter)} ({len(inter)/den:.1%})")
+
+    print("[joint-scaffold] pose→activity scaffold coverage:")
+    overlap_ratio(pose_train_idx, act_train_idx, scaff_pose, scaff_act, "train")
+    overlap_ratio(pose_val_idx,   act_val_idx,   scaff_pose, scaff_act, "val")
+    overlap_ratio(pose_test_idx,  act_test_idx,  scaff_pose, scaff_act, "test")
+
+    return split_act, split_pose
+
+def _scaffold_sets(scaffolds: np.ndarray, idx_train, idx_val, idx_test):
+    S_tr = set(scaffolds[idx_train]) if idx_train is not None else set()
+    S_va = set(scaffolds[idx_val])   if idx_val   is not None else set()
+    S_te = set(scaffolds[idx_test])  if idx_test  is not None else set()
+    return S_tr, S_va, S_te
+
+
+def assert_no_leakage(scaffolds: np.ndarray, split, tag: str):
+    """Raise if any scaffold appears both in train and val/test."""
+    S_tr, S_va, S_te = _scaffold_sets(scaffolds, split.train_split, split.val_split, split.test_split)
+    leak_tv = S_tr & S_va
+    leak_tt = S_tr & S_te
+    if leak_tv or leak_tt:
+        raise RuntimeError(
+            f"[leakage:{tag}] found scaffolds in train ∩ val: {len(leak_tv)} "
+            f"and train ∩ test: {len(leak_tt)}"
+        )
+    # Optional: quick summary
+    print(f"[no-leak:{tag}] |train|={len(S_tr)} |val|={len(S_va)} |test|={len(S_te)} "
+          f"overlap(train,val)={len(leak_tv)} overlap(train,test)={len(leak_tt)}")
+
+def _check_pose_vs_activity_scaffolds(split_act, split_pose, activity_ds, pose_ds):
+    def get_scaffolds(dataset, indices):
+        return set(dataset[i].scaffold for i in indices)
+
+    for split_name, act_idx, pose_idx in [
+        ("train", split_act.train_split, split_pose.train_split),
+        ("val",   split_act.val_split,   split_pose.val_split),
+        ("test",  split_act.test_split,  split_pose.test_split),
+    ]:
+        act_scaffolds  = get_scaffolds(activity_ds, act_idx)
+        pose_scaffolds = get_scaffolds(pose_ds, pose_idx)
+
+        overlap = pose_scaffolds & act_scaffolds
+        ratio = len(overlap) / len(pose_scaffolds) if pose_scaffolds else 0.0
+
+        print(f"[{split_name}] pose scaffolds: {len(pose_scaffolds)}")
+        print(f"           overlap with activity: {len(overlap)} "
+              f"({ratio:.1%})")
+        if overlap:
+            print(f"           examples: {list(overlap)[:5]}")
+
+def save_scaffold_molwt(
+    dataset,
+    split: Split,
+    #out_csv: str,
+    #smiles_attr: str = "smiles",
+    #scaffold_attr: str = "scaffold",
+):
+    """
+    Build a DataFrame of {split, scaffold, mol_weight} and save to CSV.
+    
+    Args:
+        dataset: your InMemoryDataset (activity_ds or pose_ds).
+        split:    a Split object with train/val/test index lists.
+        out_csv:  path to write the resulting CSV.
+        smiles_attr:    name of the SMILES field on each data object.
+        scaffold_attr:  name of the scaffold field on each data object.
+    """
+    #records = []
+    #for phase in ("train", "val", "test"):
+        #idxs = getattr(split, f"{phase}_split")
+        #for i in idxs:
+            #data = dataset[i]
+            #print(data)
+
+
+            #smi = getattr(data, smiles_attr)
+            #scf = getattr(data, scaffold_attr)
+            #mol = Chem.MolFromSmiles(smi)
+            #mw = Descriptors.MolWt(mol) if mol is not None else np.nan
+            #records.append({
+            #    "split":     phase,
+            #    "scaffold":  scf,
+            #    "mol_weight": mw,
+            #})
+
+    #df = pd.DataFrame(records)
+    # ensure directory exists
+    #os.makedirs(os.path.dirname(out_csv), exist_ok=True)
+    #df.to_csv(out_csv, index=False)
+    #print(f"Saved scaffold–molwt table to {out_csv}")
+
+
+
+
 
 
 
@@ -276,12 +528,91 @@ def make_kinodata_module(
             splits = KinodataKFoldSplit(config.split_type, config.k_fold).split(raw)
             return splits[config.split_index]
 
-    split_act = get_split(activity_ds)
-    split_pose = get_split(pose_ds)
+    #split_act = get_split(activity_ds)
+    #split_pose = get_split(pose_ds)
+    
+    #activity_plot_df = pd.DataFrame({
+    #     "activity": activity_ds.activity
+    #     })
 
+    #activity_plot_df.to_csv(f"activity_plot_df.csv", index=False)
+
+
+
+
+    split_act, split_pose = make_joint_scaffold_splits(
+    activity_ds,
+    pose_ds,
+    k=config.k_fold,
+    split_index=config.split_index,
+    val_frac=0.5,                  # keep your current 50/50 val/test split
+    seed=0,
+    max_samples_per_scaffold_activity=None,   # or e.g. 3000 if you want a cap on activity too
+    max_samples_per_scaffold_pose=3000,       # your preferred cap for pose
+)
+    
+    scaff_act = np.array([activity_ds[i].scaffold for i in range(len(activity_ds))], dtype=object)
+    scaff_pose = np.array([pose_ds[i].scaffold     for i in range(len(pose_ds))],     dtype=object)
+
+    # 1) Leakage checks (per dataset, this fold)
+    assert_no_leakage(scaff_act, split_act,  tag="activity")
+    assert_no_leakage(scaff_pose, split_pose, tag="pose")
+
+    #max_samps = getattr(config, "max_samples_per_scaffold", 1000)
+    #max_samps = getattr(config, "max_samples_per_scaffold", None)
+
+    ### saving smiles of molecules
+    act_smiles = [data.smiles for data in activity_ds]
+    act_smiles_train = [act_smiles[i] for i in split_act.train_split]
+    act_smiles_val = [act_smiles[i] for i in split_act.val_split]
+    act_smiles_test = [act_smiles[i] for i in split_act.test_split]
+    print(f"the len of the train act smiles is {len(act_smiles_train)}")
+    act_scaffold = [data.scaffold for data in activity_ds]
+    act_scaffold_train = [act_scaffold[i] for i in split_act.train_split]
+    act_scaffold_val = [act_scaffold[i] for i in split_act.val_split]
+    act_scaffold_test = [act_scaffold[i] for i in split_act.test_split]
+    print(f"the len of the train act scaffold is {len(act_scaffold_train)}")
+
+    pose_smiles = [data.smiles for data in pose_ds]
+    pose_smiles_train = [pose_smiles[i] for i in split_pose.train_split]
+    pose_smiles_val = [pose_smiles[i] for i in split_pose.val_split]
+    pose_smiles_test = [pose_smiles[i] for i in split_pose.test_split]
+    print(f"the len of the train pose smiles is {len(pose_smiles_train)}")
+    pose_scaffold = [data.scaffold for data in pose_ds]
+    pose_scaffold_train = [pose_scaffold[i] for i in split_pose.train_split]
+    pose_scaffold_val = [pose_scaffold[i] for i in split_pose.val_split]
+    pose_scaffold_test = [pose_scaffold[i] for i in split_pose.test_split]
+    print(f"the len of the train act scaffold is {len(pose_scaffold_train)}")
+
+
+    #saving the smiles and scaffolds for further analysis
+    # Activity SMILES
+    activity_df = pd.DataFrame({
+         "split": (["train"] * len(act_smiles_train) +
+              ["val"] * len(act_smiles_val) +
+              ["test"] * len(act_smiles_test)),
+         "smiles": act_smiles_train + act_smiles_val + act_smiles_test, 
+         "scaffold": act_scaffold_train + act_scaffold_val + act_scaffold_test
+         })
+
+    activity_df.to_csv(f"activity_smiles_split_{config.split_index}.csv", index=False)
+    
+    pose_df = pd.DataFrame({
+         "split": (["train"] * len(pose_smiles_train) +
+              ["val"] * len(pose_smiles_val) +
+              ["test"] * len(pose_smiles_test)),
+         "smiles": pose_smiles_train + pose_smiles_val + pose_smiles_test,
+         "scaffold": pose_scaffold_train + pose_scaffold_val + pose_scaffold_test
+         })
+
+    pose_df.to_csv(f"pose_smiles_split_{config.split_index}.csv", index=False)
+    
     print(f"Split kinodata: Train size {split_act.train_size}, Val size {split_act.val_size}, Test size {split_act.test_size}")
     print(f"Split kinodocked: Train size {split_pose.train_size}, Val size {split_pose.val_size}, Test size {split_pose.test_size}")
 
+    _check_pose_vs_activity_scaffolds(split_act, split_pose, activity_ds, pose_ds)
+
+    save_scaffold_molwt(activity_ds, split_act)
 
     num_workers_config = getattr(config, 'num_workers', 1)
     print(f"the number of workers selected for both datasets are {num_workers_config}")
@@ -310,7 +641,6 @@ def make_kinodata_module(
     )
 
     # Combine both data modules
-    #combined_data_module = CombinedDataModule(data_module_1, data_module_2, batch_size=config.batch_size, split_index=0)
     combined_data_module = CombinedDataModule(data_module_1, data_module_2)
 
     return combined_data_module

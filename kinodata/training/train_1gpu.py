@@ -1,4 +1,5 @@
 #%%
+import argparse
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
     ModelCheckpoint,
@@ -44,21 +45,21 @@ from kinodata.transform.to_complex_graph import TransformToComplexGraph
 import wandb 
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-# wandb initialization
-wandb.finish()
 
-project_name="lilac_32cpus_learnablermsd"
-wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, mode="online", settings=wandb.Settings(silent="false"))
+parser = argparse.ArgumentParser()
+parser.add_argument("--fold", type=int, required=True, help="Fold index for cross-validation")
+parser.add_argument("--csv_folder_name", type=str, required=True, help="name of csv folder for output")
+parser.add_argument("--checkpoint_name", type=str, required=True, help="name of checkpoint folder")
+args = parser.parse_args()
 
-#checking cuda stuff
-print(torch.cuda.is_available())
-print(torch.version.cuda)  # PyTorch CUDA version
-print(torch.backends.cudnn.version())  # cuDNN version
-print(torch.cuda.get_device_name(0))  # Should match your GPU
+project_name=f"{args.csv_folder_name}_fold_{args.fold}"
+print(f"the project name is {project_name}")
+#wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="iris_kfold_normal_wa_scale_0.2", mode="online", id="cplvjvq2", resume="must", settings=wandb.Settings(silent="false"))
+wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="ordered_scaffold_wl100_wh93", mode="online", settings=wandb.Settings(silent="false"))
 
 
 
-def set_seed(seed=41):
+def set_seed(seed=42):
     # Set Python random seed
     random.seed(seed)
     
@@ -80,8 +81,12 @@ def set_seed(seed=41):
     # Environment variable for dataloader workers
     os.environ["PYTHONHASHSEED"] = str(seed)
 
-# setting seed
-set_seed(41)
+
+def get_safe_num_workers():
+    try:
+        return max(8, len(os.sched_getaffinity(0))) 
+    except AttributeError:
+        return min(1, os.cpu_count())
 
 
 ####config
@@ -110,51 +115,34 @@ config["perturb_complex_positions"] = 0
 config["perturb_ligand_positions"] = 0.0
 config["need_distances"] = False
 config["perturb_pocket_positions"] = 0.0
-config["early_stopping_patience"] = 100
-config["seed"] = 16 #probably need ot change this so it mathces the seed 41
+config["early_stopping_patience"] = 24
+config["seed"] = 42 
 config["batch_size"] = 32
-config["split_type"] = "random-k-fold"
+config["split_type"] = "scaffold-k-fold"
 config["filter_rmsd_max_value"] = 10
-config["split_index"]=0
+config["k_fold"] = 5
+config["split_index"]=args.fold
 config["max_epochs"] = 500
 config["accelerator"] = "gpu"
-
-def get_safe_num_workers():
-    try:
-        return max(8, len(os.sched_getaffinity(0))) 
-    except AttributeError:
-        return min(1, os.cpu_count())
+config["csv_save_dir"]=f"/data1/choderaj/lopezrr/kinodata-3D-affinity-prediction/kinodata/training/data_runs_test/{project_name}"
+set_seed(config["seed"])
 n_w=get_safe_num_workers()
-
 print(f"num workers from train script {n_w}")
 config["num_workers"]=n_w
-config["csv_save_dir"]="/data/chodera/lopezrir/kinodata-3D-affinity-prediction/kinodata/training/data_runs/lilac_32cpus_learnablermsd"
-
 
 print(f"the configuration is {config}")
-####
-#parameters for pose
-#config["weight_decay"] = 0.005n
-#config["dropout"] = 0.2
-#for overfitting delete afterwards
-#parameters below for overfit
-#config["lr"] = 1e-3
-#config["min_lr"] = 1e-4
-#config["max_epochs"] = 600
-#smaller model
-#config["hidden_channels"] = 64
-#config["num_attention_blocks"] = 2
-#config["num_heads"]=2
+
 
 torch.cuda.empty_cache()
 print(torch.cuda.memory_summary())
+checkpoint_dir = f"{args.checkpoint_name}_fold_{args.fold}"
 
 #to save the model while running
 checkpoint_callback = ModelCheckpoint(
-    dirpath="checkpoints_learnable/",
+    dirpath=checkpoint_dir,
     filename="best_model",
     save_top_k=1,
-    monitor="val/mae_activity",  # or "val_activity_loss", etc
+    monitor="val/combined_mae",  # or "val_activity_loss", etc
     mode="min",
     save_last=True
 )
@@ -162,15 +150,12 @@ checkpoint_callback = ModelCheckpoint(
 def train(config, fn_data, fn_model=None):
     
     logger = WandbLogger(
-        project="kinodata-3d_rmsd10",
         log_model="all",
         )
     
     model = fn_model(config)# Instantiate the model
 
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    print(f"Total trainable parameters: {total_params}")    
+   
    
     data_module = fn_data
     logger.watch(model, log="all", log_freq=10, log_graph=True)
@@ -180,14 +165,9 @@ def train(config, fn_data, fn_model=None):
     data_module.setup(stage='fit')
     
    
-    #validation_checkpoint = ModelCheckpoint(
-    #    monitor="val/mae_activity",
-    #    mode="min",
-    #)
-    #print(data_module)
     lr_monitor = LearningRateMonitor("epoch")
     early_stopping = EarlyStopping(
-        monitor="val/mae_activity", 
+        monitor="val/combined_mae", 
         patience=config.early_stopping_patience, 
         mode="min",
     )
@@ -195,13 +175,10 @@ def train(config, fn_data, fn_model=None):
     trainer = pl.Trainer(
         callbacks=[checkpoint_callback, lr_monitor, early_stopping],
         logger=logger,
-        #auto_select_gpus=True,
         max_epochs=config.max_epochs,  
         accelerator=config.accelerator,
-        #strategy = "ddp",
         devices=1,
         accumulate_grad_batches=config.accumulate_grad_batches,
-        #callbacks=[validation_checkpoint, lr_monitor, early_stopping],
         gradient_clip_val=config.clip_grad_value,
     )
     if config.dry_run:
@@ -213,7 +190,8 @@ def train(config, fn_data, fn_model=None):
 
 
     trainer.fit(model, datamodule=data_module)
-    #trainer.test(ckpt_path="best", datamodule=data_module)
+    #trainer.fit(model, datamodule=data_module, ckpt_path=f"{checkpoint_dir}/last.ckpt")
+    trainer.test(ckpt_path="best", datamodule=data_module)
 
 
 data_module = make_kinodata_module(
@@ -226,17 +204,10 @@ train(
         config=config,
         fn_model=make_model,
         fn_data=data_module
-        #partial(
-            #make_kinodata_module,
-            #data_module,
-            #one_time_transform=partial(
-            #    apply_transform_instance_permament,
-            #    transform=TransformToComplexGraph(
-            #        remove_heterogeneous_representation=True
-            #    ),
-            #),
-        #),
     )
 
 
-#%%
+
+model = make_model(config)
+
+wandb.finish()

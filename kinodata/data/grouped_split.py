@@ -1,6 +1,6 @@
 from pathlib import Path
 from functools import singledispatchmethod
-from typing import List, Optional, Protocol
+from typing import List, Optional, Iterable, Tuple, Protocol
 import numpy as np
 from numpy.random import default_rng
 from sklearn.model_selection import GroupKFold, KFold
@@ -11,6 +11,59 @@ from .utils.cluster import AffinityPropagation
 from .utils.similarity import BLOSUMSubstitutionSimilarity
 from .dataset import KinodataDocked
 from .dataset_davids_data import DavidsdataDocked
+from collections import Counter
+from itertools import islice
+
+def _first_n(it, n=5):
+    return list(islice(it, n))
+
+def _check_scaffold_disjoint(scaffolds: np.ndarray, sp: Split) -> dict:
+    """Return sizes of scaffold overlaps between splits (should all be zero)."""
+    train_set = set(scaffolds[sp.train_split])
+    val_set   = set(scaffolds[sp.val_split])  if sp.val_split is not None else set()
+    test_set  = set(scaffolds[sp.test_split]) if sp.test_split is not None else set()
+
+    leak_tv = train_set & val_set
+    leak_tt = train_set & test_set
+    #leak_vt = val_set  & test_set
+
+    return {
+        "train∩val": (len(leak_tv), _first_n(leak_tv)),
+        "train∩test": (len(leak_tt), _first_n(leak_tt)),
+        #"val∩test": (len(leak_vt), _first_n(leak_vt)),
+    }
+
+def _assert_no_scaffold_leakage(scaffolds: np.ndarray, splits: List[Split], tag: str):
+    for i, sp in enumerate(splits):
+        res = _check_scaffold_disjoint(scaffolds, sp)
+        msg_lines = [f"[{tag}] fold {i} scaffold overlaps:"]
+        ok = True
+        for k, (n, examples) in res.items():
+            msg_lines.append(f"  {k}: {n}" + (f" (e.g. {examples})" if n else ""))
+            if n > 0:
+                ok = False
+        if not ok:
+            # You can change to `warnings.warn("\n".join(msg_lines))` if you prefer non-fatal
+            raise RuntimeError("\n".join(msg_lines))
+        else:
+            print("\n".join(msg_lines))
+
+def _print_scaffold_stats_per_fold(scaffolds: np.ndarray,
+                                   splits: List[Split],
+                                   tag: str = "") -> None:
+    """
+    Print how many (unique) scaffolds and molecules each part
+    (train / val / test) of every fold contains.
+    """
+    for fold_id, sp in enumerate(splits):
+        print(f"\n[{tag}] fold {fold_id}")
+        for name, idx in zip(["train", "val", "test"],
+                             [sp.train_split, sp.val_split, sp.test_split]):
+            part_scaffolds = scaffolds[idx]
+            cnt = Counter(part_scaffolds)
+            print(f"  {name:5s}: {len(cnt):4d} scaffolds, "
+                  f"{len(part_scaffolds):5d} mols "
+                  f"(largest={cnt.most_common(1)[0][1]})")
 
 
 def _split_random(a: np.ndarray, percentile: float, seed: int = 0):
@@ -71,46 +124,62 @@ def limit_scaffold_representation(group_index, max_samples_per_scaffold):
 #    generator = group_k_fold.split(_X, groups=group_index)
 #    return _generator_to_list(generator)
 
+
+# assumes:
+# Split = namedtuple("Split", ["train_index", "val_index", "test_index"])
+# _split_random(test_index: np.ndarray, frac_val: float) -> Tuple[np.ndarray, np.ndarray]
+# limit_scaffold_representation(groups: np.ndarray, max_per: int) -> Union[np.ndarray, np.bool_]
+
+def _as_indices(mask_or_idx: np.ndarray, n: int) -> np.ndarray:
+    """Normalize boolean mask or integer indices to integer indices."""
+    mask_or_idx = np.asarray(mask_or_idx)
+    if mask_or_idx.dtype == bool:
+        if mask_or_idx.shape[0] != n:
+            raise ValueError("Boolean mask length does not match array length.")
+        return np.nonzero(mask_or_idx)[0]
+    return mask_or_idx.astype(np.int64, copy=False)
+
+def _generator_to_list(generator: Iterable[Tuple[np.ndarray, np.ndarray]]) -> List["Split"]:
+    # unchanged behavior: uses given indices as-is
+    return [Split(train_index, *_split_random(test_index, 0.5))  # type: ignore
+            for train_index, test_index in generator]
+
 def group_k_fold_split(
     group_index: np.ndarray,
     k: int,
     max_samples_per_scaffold: Optional[int] = None,
-) -> List[Split]:
+) -> List["Split"]:
     """
-    Custom GroupKFold split with optional filtering of overrepresented scaffolds.
-
-    Args:
-        group_index (np.ndarray): Array of scaffold identifiers.
-        k (int): Number of folds.
-        max_samples_per_scaffold (int, optional): Max samples per scaffold. Default is None.
-
-    Returns:
-        List[Split]: Splits for training, validation, and test.
+    GroupKFold splits with optional downsampling of overrepresented scaffolds.
+    Returns global indices so they map to the original dataset.
     """
-    #print("group indices before filtered")
-    #print(group_index[:5])
-    #print("group index shape before filtering "+str(np.shape(group_index)))
+    group_index = np.asarray(group_index).ravel()
+    n = group_index.shape[0]
+    global_idx = np.arange(n)
+
+    # Optional filtering: compute a view into the original dataset
     if max_samples_per_scaffold is not None:
-        filtered_indices = limit_scaffold_representation(group_index, max_samples_per_scaffold)
-        group_index = group_index[filtered_indices]
-        #print("group indices after filtered")
-        #print(group_index[:5])
-        #print("group index shape after filtering "+str(np.shape(group_index)))
+        keep = limit_scaffold_representation(group_index, max_samples_per_scaffold)
+        keep = _as_indices(np.asarray(keep), n)
+        group_index_f = group_index[keep]
+        global_idx = global_idx[keep]
+    else:
+        group_index_f = group_index  # no filtering
 
-    group_k_fold = GroupKFold(k)
-    _X = np.zeros((group_index.shape[0], 1))
-    generator = group_k_fold.split(_X, groups=group_index)
-    #return _generator_to_list(generator)
-    splits = []
-    for train_idx, test_idx in generator:
-        train_global = filtered_indices[train_idx]
-        test_global = filtered_indices[test_idx]
+    # Safety: GroupKFold requires at least k unique groups
+    n_unique = np.unique(group_index_f).size
+    if k > n_unique:
+        raise ValueError(f"k={k} is larger than number of unique groups ({n_unique}).")
 
-        # Further split the test set into validation and test
-        val_idx, test_idx = _split_random(test_global, 0.5)  # Adjust as needed
-        splits.append(Split(train_global, val_idx, test_idx))
+    # Fit GroupKFold on the (possibly) filtered view
+    gkf = GroupKFold(n_splits=k)
+    _X = np.zeros((group_index_f.shape[0], 1))
+    gen = gkf.split(_X, groups=group_index_f)
 
-    return splits
+    # Map fold indices back to original/global indices before producing Split objects
+    mapped_gen = ((global_idx[tr], global_idx[te]) for tr, te in gen)
+    return _generator_to_list(mapped_gen)
+
 
 
 
@@ -176,14 +245,18 @@ class KinodataKFoldSplit:
         if self.split_type == "scaffold-k-fold":
             scaffolds, idents = zip(*[(data.scaffold, data.ident) for data in dataset])
             scaffolds = np.array(scaffolds)
-            splits = group_k_fold_split(group_index=scaffolds, k=self.k, max_samples_per_scaffold=self.max_samples_per_scaffold)
+            splits = group_k_fold_split(group_index=scaffolds, k=self.k, max_samples_per_scaffold=3000) #=self.max_samples_per_scaffold)
 
             # Debugging: Check scaffold distribution
             scaffold_counts = pd.DataFrame({'scaffold': scaffolds}).value_counts()
-            print("Scaffold distribution scaffold:")
+            print(f"Scaffold distribution scaffold for {self.k} split:")
             print(scaffold_counts)
+            _print_scaffold_stats_per_fold(scaffolds, splits, tag="scaffold-k-fold")
 
+            _assert_no_scaffold_leakage(scaffolds, splits, tag="scaffold-k-fold")
+            
             return splits
+
         if self.split_type == "pocket-k-fold":
             pocket_data = pd.DataFrame(
                 {

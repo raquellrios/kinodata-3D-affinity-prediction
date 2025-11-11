@@ -331,8 +331,10 @@ class DavidsdataDocked(InMemoryDataset):
         self.num_processes = num_processes
         self.post_filter = post_filter
         super().__init__(root, transform, pre_transform, pre_filter)
+        print(self.processed_paths[0])
+        print(self.root)
+        print(self.processed_file_names)
         self.data, self.slices = torch.load(self.processed_paths[0])
-
     
     @property
     def pocket_sequence_file(self) -> Path:

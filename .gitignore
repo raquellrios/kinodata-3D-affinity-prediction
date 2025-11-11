@@ -26,6 +26,9 @@ kinodata/training/checkpoints*/
 kinodata/training/kinoda-3d_rmsd10
 kinodata/training/kinodata-3d_rmsd10
 kinodata/training/data_runs
+kinodata/training/data_runs_test
+kinodata/training/experiment_checkpoints*
+kinodata/training/restart*
 kinodata/training/*.sh
 kinodata/model/regression_og_may24.py
 kiondata/data/data_module_og_may.py
