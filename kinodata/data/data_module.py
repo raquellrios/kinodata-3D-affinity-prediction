@@ -413,8 +413,7 @@ def make_kinodata_module(
 
             print(f"Split kinodata: Train size {split_act.train_size}, Val size {split_act.val_size}, Test size {split_act.test_size}")
             print(f"Split kinodocked: Train size {split_pose.train_size}, Val size {split_pose.val_size}, Test size {split_pose.test_size}")
-
-
+            
         elif stype == "scaffold-k-fold":
             # joint scaffold split (aligned activity/pose)
             split_act, split_pose = make_joint_scaffold_splits(
@@ -423,6 +422,7 @@ def make_kinodata_module(
                 max_samples_per_scaffold_activity=cap_act,
                 #max_samples_per_scaffold_pose=cap_pose,
                 max_samples_per_scaffold_pose=3000,
+                
             )
 
             # ------------------------

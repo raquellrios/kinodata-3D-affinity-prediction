@@ -272,15 +272,17 @@ class RegressionModel(pl.LightningModule):
         if batch["pose"] is None:
 
             total_loss = 0.5 * torch.exp(-s_act) *  activity_loss + s_act
+            self.log("train/w_act_exp_neg_s",   torch.exp(-s_act), batch_size=n_act, on_step=True, on_epoch=True)
+            self.log("train/log_sigma_act",     s_act, batch_size=n_act, on_step=True, on_epoch=True)
 
         else:
 
             total_loss = 0.5 * torch.exp(-s_act) *  activity_loss + torch.exp(-s_pose) * pose_loss + (s_act + s_pose)
 
-        self.log("train/w_act_exp_neg_s",   torch.exp(-s_act),  on_step=True, on_epoch=True)
-        self.log("train/w_pose_exp_neg_s",  torch.exp(-s_pose), on_step=True, on_epoch=True)
-        self.log("train/log_sigma_act",     s_act,  on_step=True, on_epoch=True)
-        self.log("train/log_sigma_pose",    s_pose, on_step=True, on_epoch=True)
+            self.log("train/w_act_exp_neg_s",   torch.exp(-s_act), batch_size=n_act, on_step=True, on_epoch=True)
+            self.log("train/w_pose_exp_neg_s",  torch.exp(-s_pose), batch_size=n_pose, on_step=True, on_epoch=True)
+            self.log("train/log_sigma_act",     s_act,  batch_size=n_act, on_step=True, on_epoch=True)
+            self.log("train/log_sigma_pose",    s_pose,  batch_size=n_pose, on_step=True, on_epoch=True)
 
         self.log("train/loss_pose", pose_loss, batch_size=n_pose, on_epoch=True, on_step=True)
         self.log("train/loss_activity", activity_loss, batch_size=n_act, on_epoch=True, on_step=True)
