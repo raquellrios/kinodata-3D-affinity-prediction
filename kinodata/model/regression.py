@@ -65,8 +65,8 @@ class RegressionModel(pl.LightningModule):
         #self.rmsd_shift = nn.Parameter(torch.tensor(2.5))
 
         # Learnable weights
-        #self.log_sigma_act  = nn.Parameter(torch.tensor(0.0))
-        #self.log_sigma_pose = nn.Parameter(torch.tensor(0.0))
+        self.log_sigma_act  = nn.Parameter(torch.tensor(0.0)) # s_act = log σ_act^2
+        self.log_sigma_pose = nn.Parameter(torch.tensor(0.0))
         
 
          
@@ -109,15 +109,9 @@ class RegressionModel(pl.LightningModule):
     
     
     def rmsd_to_prob_transform(self, pose_rmsd):
-    
-
-        
+          
         #prob_pose = 1 / (1 + torch.exp( 0.7 * (pose_rmsd - 4.5)))#soft
         prob_pose = 1 / (1 + torch.exp( 0.9 * (pose_rmsd - 4.5))) #new soft
-        ##prob_pose = 1 / (1 + torch.exp( 3.5 * (pose_rmsd - 4.5)))#steep
-        ##prob_pose = 1 / (1 + torch.exp( self.rmsd_scale * (pose_rmsd - self.rmsd_shift)))
-        ##prob_pose = 1 / (1 + torch.exp( self.rmsd_scale * (pose_rmsd - 4.5))) 
-
         
         return prob_pose
     
@@ -182,26 +176,11 @@ class RegressionModel(pl.LightningModule):
         weight = torch.where(target_pose_certainty <= 0.2, w_low, weight)
         weight = torch.where(target_pose_certainty >= 0.8, w_high, weight)
 
-        #non-focal loss
+  
         #loss_pose=torch.nn.functional.binary_cross_entropy_with_logits(pred_pose_logit, target_pose_certainty)#, weight=weights)
         loss_pose=torch.nn.functional.binary_cross_entropy_with_logits(pred_pose_logit, target_pose_certainty, weight=weight)
 
         return loss_pose
-
-        #focal loss
-        #pred_pose = torch.sigmoid(pred_pose_logit)
-
-        #p_t =  target_pose_certainty * pred_pose + (1 - pred_pose) * (1 - target_pose_certainty)
-
-        #mod_factor = (1 - p_t) ** gamma
-
-        #bce_loss = torch.nn.functional.binary_cross_entropy_with_logits(pred_pose_logit, target_pose_certainty, reduction="none")
-        
-        #loss_pose = mod_factor * bce_loss
-
-          
-        #return loss_pose.mean()
-
 
 
     def training_step(self, batch, batch_idx, dataloader_idx=0, *args) -> Tensor:
@@ -230,23 +209,10 @@ class RegressionModel(pl.LightningModule):
 
             loss_activity_raw = self.compute_loss_activity(pred_act, batch_activity)
             
-            # learned weights loss
-            #C = 0.5
-            #loss_act_safe = loss_activity_raw + C
-            #w_act_sigma = torch.exp(-self.log_sigma_act)
-            #loss_act  = 0.5 * w_act_sigma * loss_act_safe  +  0.5 * self.log_sigma_act
-            #self.log("train/exp_sigma_act", w_act_sigma, batch_size=batch_activity.num_graphs, on_epoch=True, on_step=False)
-            #self.log("train/log_sigma_act", self.log_sigma_act, batch_size=batch_activity.num_graphs, on_epoch=True, on_step=False)
-
-
-
-            
-            #self.log("train/loss_activity", loss_activity_raw, batch_size=batch_activity.num_graphs, on_epoch=True, on_step=True)
 
             self.log("batch_act", batch_activity.num_graphs, batch_size=batch_activity.num_graphs, on_epoch=False, on_step=True)
 
-            #self.log("train/weight_pki", self.current_weight_pki, batch_size= batch_activity.num_graphs, on_epoch=True, on_step=False)
-
+           
 
             if self.current_epoch % 10 == 0:
                 self.training_step_outputs["activity"].append({
@@ -259,10 +225,6 @@ class RegressionModel(pl.LightningModule):
                     })
 
             
-            #self.log("nll_mean_term", torch.mean((batch_activity.y - pred_act[:,0]) ** 2 / variance), batch_size=batch_activity.num_graphs, on_step=True, on_epoch=True)
-            #self.log("regulariser", torch.mean(1 / variance), batch_size=batch_activity.num_graphs, on_step=True, on_epoch=True)
-            #self.log("nll_variance_term", torch.mean(torch.log(2 * torch.pi * variance)), batch_size= batch_activity.num_graphs, on_step=True,)
-
             
 
         if batch["pose"]:
@@ -282,20 +244,9 @@ class RegressionModel(pl.LightningModule):
 
             loss_pose_raw = self.compute_loss_pose(pred_pose, batch_pose)
             
-            #learn weight loss
-            #w_pose_sigma = torch.exp(-self.log_sigma_pose)
-            #loss_pose = 0.5 * w_pose_sigma * loss_pose_raw   +  0.5 * self.log_sigma_pose
-            #loss_pose = w_pose_sigma * loss_pose_raw   +  0.5 * self.log_sigma_pose
-            #self.log("train/exp_sigma_pose", w_pose_sigma, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=False)
-            #self.log("train/log_sigma_pose", self.log_sigma_pose, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=False)
-            
-            
-            #self.log("train/loss_pose", loss_pose_raw, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=True)
-            self.log("batch_pose", batch_pose.num_graphs, batch_size=batch_pose.num_graphs, on_epoch=False, on_step=True)
-            #self.log("train/scale_shift", self.rmsd_shift, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=False)
-            #self.log("train/scale_rmsd", self.rmsd_scale, batch_size=batch_pose.num_graphs, on_epoch=True, on_step=False)
-            #self.log("train/weight_pose", self.current_weight_pose, batch_size= batch_pose.num_graphs, on_epoch=True, on_step=False)
 
+            self.log("batch_pose", batch_pose.num_graphs, batch_size=batch_pose.num_graphs, on_epoch=False, on_step=True)
+            
             if self.current_epoch % 10 == 0:
                 self.training_step_outputs["pose"].append({
                     "pose_pred":torch.sigmoid(pred_pose[:,2]).detach().cpu(), 
@@ -307,21 +258,35 @@ class RegressionModel(pl.LightningModule):
         n_act=batch["activity"].num_graphs
 
         # standard weighting loss
-        activity_loss = self.current_weight_pki * loss_activity_raw 
-        pose_loss = self.current_weight_pose * loss_pose_raw
-        total_loss = activity_loss + pose_loss #+reg loss
+        #activity_loss = self.current_weight_pki * loss_activity_raw 
+        #pose_loss = self.current_weight_pose * loss_pose_raw
+
+        activity_loss =  loss_activity_raw 
+        pose_loss =  loss_pose_raw
+
+        s_act = self.log_sigma_act
+        s_pose = self.log_sigma_pose
+
+        #total_loss = activity_loss + pose_loss 
+
+        if batch["pose"] is None:
+
+            total_loss = 0.5 * torch.exp(-s_act) *  activity_loss + s_act
+
+        else:
+
+            total_loss = 0.5 * torch.exp(-s_act) *  activity_loss + torch.exp(-s_pose) * pose_loss + (s_act + s_pose)
+
+        self.log("train/w_act_exp_neg_s",   torch.exp(-s_act),  on_step=True, on_epoch=True)
+        self.log("train/w_pose_exp_neg_s",  torch.exp(-s_pose), on_step=True, on_epoch=True)
+        self.log("train/log_sigma_act",     s_act,  on_step=True, on_epoch=True)
+        self.log("train/log_sigma_pose",    s_pose, on_step=True, on_epoch=True)
+
         self.log("train/loss_pose", pose_loss, batch_size=n_pose, on_epoch=True, on_step=True)
         self.log("train/loss_activity", activity_loss, batch_size=n_act, on_epoch=True, on_step=True)
         self.log("train/total_loss", total_loss, batch_size= n_pose+n_act, on_epoch=True, on_step=True)
 
         self.log("batch_total", n_pose+n_act, batch_size=n_pose+n_act, on_epoch=True, on_step=True)
-        
-        
-        #learned weights loss 
-        #total_loss = loss_act + loss_pose
-        #self.log("train/total_loss", total_loss, batch_size= n_pose+n_act, on_epoch=True, on_step=True)
-        #self.log("train/loss_pose", loss_pose, batch_size=n_pose, on_epoch=True, on_step=True)
-        #self.log("train/loss_activity", loss_act, batch_size=n_act, on_epoch=True, on_step=True)
 
 
         return total_loss
