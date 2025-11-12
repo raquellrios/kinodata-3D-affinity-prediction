@@ -176,8 +176,8 @@ class RegressionModel(pl.LightningModule):
         #converting the input into the sigmoid  
         target_pose_certainty = self.rmsd_to_prob_transform(target_exp_rmsd)
         
-        w_low = 100
-        w_high = 93
+        w_low = 10
+        w_high = 7
         weight = torch.ones_like(target_pose_certainty)
         weight = torch.where(target_pose_certainty <= 0.2, w_low, weight)
         weight = torch.where(target_pose_certainty >= 0.8, w_high, weight)

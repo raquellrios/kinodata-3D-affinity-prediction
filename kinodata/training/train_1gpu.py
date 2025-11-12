@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers.wandb import WandbLogger
 
-#from kinodata.data.data_module import make_kinodata_module
+from kinodata.data.data_module import make_kinodata_module
 
 import random
 import os
@@ -55,7 +55,7 @@ args = parser.parse_args()
 project_name=f"{args.csv_folder_name}_fold_{args.fold}"
 print(f"the project name is {project_name}")
 #wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="iris_kfold_normal_wa_scale_0.2", mode="online", id="cplvjvq2", resume="must", settings=wandb.Settings(silent="false"))
-wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="DATA_TEST_ordered_scaffold_wl100_wh93", mode="online", settings=wandb.Settings(silent="false"))
+wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="new_datamodule_random_wl10_wh7", mode="online", settings=wandb.Settings(silent="false"))
 
 
 
@@ -132,14 +132,14 @@ config["num_workers"]=n_w
 
 print(f"the configuration is {config}")
 
-if config["split_type"] == "scaffold-k-fold":
-    from kinodata.data.data_module_scaffold.data_module import make_kinodata_module
+#if config["split_type"] == "scaffold-k-fold":
+#    from kinodata.data.data_module_scaffold.data_module import make_kinodata_module
 
-if config["split_type"] == "random-k-fold":
-    from kinodata.data.data_module_random.data_module import make_kinodata_module
+#if config["split_type"] == "random-k-fold":
+#    from kinodata.data.data_module_random.data_module import make_kinodata_module
 
-if config["split_type"] == "pocket-k-fold":
-    from kinodata.data.data_module_pocket.data_module import make_kinodata_module
+#if config["split_type"] == "pocket-k-fold":
+#    from kinodata.data.data_module_pocket.data_module import make_kinodata_module
 
 
 torch.cuda.empty_cache()
