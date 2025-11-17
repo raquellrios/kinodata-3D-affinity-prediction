@@ -261,31 +261,42 @@ class RegressionModel(pl.LightningModule):
         #activity_loss = self.current_weight_pki * loss_activity_raw 
         #pose_loss = self.current_weight_pose * loss_pose_raw
 
-        activity_loss =  loss_activity_raw 
+        activity_loss_safe =  (loss_activity_raw + 1.0).clamp_min(1e-6)
         pose_loss =  loss_pose_raw
 
-        s_act = self.log_sigma_act
-        s_pose = self.log_sigma_pose
+        #s_act = self.log_sigma_act
+        #s_pose = self.log_sigma_pose
 
+        # Use learned sigmas but clamp them to prevent explosions
+        s_act  = self.log_sigma_act.clamp(-6.0, 6.0)
+        s_pose = self.log_sigma_pose.clamp(-6.0, 6.0)
+
+
+        #for wegihting the different in size:
+        self.corr_act = 1.0
+        self.corr_pose = 1.35
         #total_loss = activity_loss + pose_loss 
 
         if batch["pose"] is None:
 
-            total_loss = 0.5 * torch.exp(-s_act) *  activity_loss + s_act
+            total_loss = 0.5 * torch.exp(-s_act) *  activity_loss_safe + s_act
             self.log("train/w_act_exp_neg_s",   torch.exp(-s_act), batch_size=n_act, on_step=True, on_epoch=True)
             self.log("train/log_sigma_act",     s_act, batch_size=n_act, on_step=True, on_epoch=True)
 
         else:
 
-            total_loss = 0.5 * torch.exp(-s_act) *  activity_loss + torch.exp(-s_pose) * pose_loss + (s_act + s_pose)
-
+            #total_loss = 0.5 * torch.exp(-s_act) *  activity_loss_safe + torch.exp(-s_pose) * pose_loss + (s_act + s_pose)
+            total_loss = (self.corr_act  * (0.5 * torch.exp(-s_act)  * activity_loss_safe + s_act) +
+                          self.corr_pose * (      torch.exp(-s_pose) * pose_loss + s_pose))
+            
             self.log("train/w_act_exp_neg_s",   torch.exp(-s_act), batch_size=n_act, on_step=True, on_epoch=True)
             self.log("train/w_pose_exp_neg_s",  torch.exp(-s_pose), batch_size=n_pose, on_step=True, on_epoch=True)
             self.log("train/log_sigma_act",     s_act,  batch_size=n_act, on_step=True, on_epoch=True)
             self.log("train/log_sigma_pose",    s_pose,  batch_size=n_pose, on_step=True, on_epoch=True)
 
         self.log("train/loss_pose", pose_loss, batch_size=n_pose, on_epoch=True, on_step=True)
-        self.log("train/loss_activity", activity_loss, batch_size=n_act, on_epoch=True, on_step=True)
+        self.log("train/loss_activity_safe", activity_loss_safe, batch_size=n_act, on_epoch=True, on_step=True)
+        self.log("train/loss_activity", loss_activity_raw, batch_size=n_act, on_epoch=True, on_step=True)
         self.log("train/total_loss", total_loss, batch_size= n_pose+n_act, on_epoch=True, on_step=True)
 
         self.log("batch_total", n_pose+n_act, batch_size=n_pose+n_act, on_epoch=True, on_step=True)

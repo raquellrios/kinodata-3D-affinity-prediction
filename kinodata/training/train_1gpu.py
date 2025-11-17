@@ -55,7 +55,7 @@ args = parser.parse_args()
 project_name=f"{args.csv_folder_name}_fold_{args.fold}"
 print(f"the project name is {project_name}")
 #wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="iris_kfold_normal_wa_scale_0.2", mode="online", id="cplvjvq2", resume="must", settings=wandb.Settings(silent="false"))
-wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="homoscedastic_weighting_random_wl10_wh7", mode="online", settings=wandb.Settings(silent="false"))
+wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="pose_weight_homoscedastic_random_wl10_wh7", mode="online", settings=wandb.Settings(silent="false"))
 
 
 
