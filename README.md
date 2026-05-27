@@ -23,7 +23,7 @@ Structure-based machine learning for kinase inhibitor prediction is limited by t
 The workflow consists of four main steps:
 
 **(a) Dataset construction.**  
-Two complementary datasets are used during training: [Kinodata](//github.com/openkinome/kinodata) an activity dataset containing kinase–ligand complexes with experimental pIC50 labels and a pose-quality dataset containing generated cross-docked kinase–ligand poses with RMSD-derived pose-quality labels.
+Two complementary datasets are used during training: [Kinodata](//github.com/openkinome/kinodata), an activity dataset containing kinase–ligand complexes with experimental pIC50 labels and a pose-quality dataset containing generated cross-docked kinase–ligand poses with RMSD-derived pose-quality labels.
 
 **(b) Graph construction and featurization.**  
 Each kinase–ligand complex is converted into a molecular graph. Atoms are represented as nodes, while covalent bonds and spatial contacts are represented as edges. The graph is featurized using atom-level descriptors, bond-order information, and interatomic distances.
