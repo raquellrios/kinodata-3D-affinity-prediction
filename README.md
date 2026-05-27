@@ -13,9 +13,6 @@ Unlike structure-based models that rely only on poses below a fixed RMSD cutoff,
 The predicted pose quality is used to modulate the contribution of each structure to the activity loss, allowing the model to learn from heterogeneous structural data while giving greater importance to reliable complexes.
 
 ## Overview
-![Schematic overview of the multi-objective model workflow](methods_detailed_fig.png)
-
-## Overview
 
 Structure-based machine learning for kinase inhibitor prediction is limited by the scarcity of experimentally resolved protein–ligand complexes. Computationally generated structures, such as docked poses, can reduce this limitation, but their usefulness depends strongly on pose quality.
 
@@ -26,13 +23,13 @@ Structure-based machine learning for kinase inhibitor prediction is limited by t
 The workflow consists of four main steps:
 
 **(a) Dataset construction.**  
-Two complementary datasets are used during training: an activity dataset containing kinase–ligand complexes with experimental pIC50 labels, and a pose-quality dataset containing generated cross-docked kinase–ligand poses with RMSD-derived pose-quality labels.
+Two complementary datasets are used during training: [Kinodata](//github.com/openkinome/kinodata) an activity dataset containing kinase–ligand complexes with experimental pIC50 labels and a pose-quality dataset containing generated cross-docked kinase–ligand poses with RMSD-derived pose-quality labels.
 
 **(b) Graph construction and featurization.**  
 Each kinase–ligand complex is converted into a molecular graph. Atoms are represented as nodes, while covalent bonds and spatial contacts are represented as edges. The graph is featurized using atom-level descriptors, bond-order information, and interatomic distances.
 
 **(c) E(3)-invariant message passing.**  
-Both activity and pose-quality mini-batches are processed by the same shared E(3)-invariant message-passing GNN. This produces learned node and edge embeddings while preserving invariance to rotations and translations of the input structure.
+Both activity and pose-quality mini-batches are processed by the same E(3)-invariant message-passing GNN.
 
 **(d) Multi-output readout and joint training.**  
 A multi-output readout predicts binding affinity, activity uncertainty, and pose quality. These outputs are optimized jointly using a multi-objective loss that combines the activity and pose-quality objectives.
