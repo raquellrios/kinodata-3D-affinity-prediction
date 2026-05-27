@@ -44,6 +44,7 @@ For each kinase–ligand complex `x`, the model predicts:
 mu(x)         predicted activity
 sigma^2(x)   predicted activity variance
 q_pose(x)    predicted pose quality
+```
 
 ## Installation
 
