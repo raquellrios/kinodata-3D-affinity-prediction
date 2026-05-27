@@ -34,11 +34,8 @@ from kinodata.data.grouped_split import (
 
 Kwargs = Dict[str, Any]
 
-# ---------------------------
-# Helpers (unchanged behavior)
-# ---------------------------
 
-# --- Scaffold diagnostics (verbatim-style) ---
+# --- Scaffold diagnostics  ---
 
 
 def _scaffold_array(ds):
@@ -151,7 +148,6 @@ def _print_fold_overlap(activity_ds, pose_ds, split_act, split_pose):
         print(f"[{tag}]  act={len(A_set):5d}  pose={len(P_set):5d}  ∪={U:5d}  ∩={I:5d}  Jaccard={J:.3f}")
 
 
-######
 
 def load_precomputed_split(path_or_cfg) -> Split:
     # supports config.data_split being a string path or a config with .data_split
@@ -426,7 +422,7 @@ def make_kinodata_module(
             )
 
             # ------------------------
-            # optional diagnostics dump
+            # diagnostics dump
             # ------------------------
             # --- Optional: print scaffold diagnostics for scaffold-k-fold
             scaff_act = _scaffold_array(activity_ds)
@@ -481,7 +477,7 @@ def make_kinodata_module(
             raise ValueError(f"Unknown split_type={stype}")
 
 
-# (unchanged) also prints your num_workers later
+
 
     def dump_smiles_scaffolds(ds, split, prefix):
         smiles = [d.smiles for d in ds]
@@ -505,9 +501,9 @@ def make_kinodata_module(
     print(f"[activity split] train={split_act.train_size} val={split_act.val_size} test={split_act.test_size}")
     print(f"[pose     split] train={split_pose.train_size} val={split_pose.val_size} test={split_pose.test_size}")
 
-    # ---------------------
+
     # build Lightning loaders
-    # ---------------------
+  
     num_workers = getattr(config, "num_workers", 1)
     dm_activity = make_data_module(
         split_act,

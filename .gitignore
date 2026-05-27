@@ -41,6 +41,8 @@ kiondata/data/data_module_og_may.py
 kinodata/data/non_matching_smiles.txt
 kinodata/data/docked_data_check_onerow.py
 kinodata/data/docked_data_check.py
+kinodata/training/train_data_module.py
+kinodata/training/train_2_gpus.py
 
 # condor logs
 condor/*.log

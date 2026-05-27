@@ -33,11 +33,9 @@ import torch
 import kinodata.configuration as cfg
 from kinodata.model import ComplexTransformer, DTIModel, RegressionModel
 from kinodata.model.complex_transformer import make_model as make_complex_transformer
-#from kinodata.data.data_module import make_kinodata_module
 from kinodata.transform import TransformToComplexGraph
 
 import kinodata.configuration as configuration
-#from kinodata.training import train
 from kinodata.model.complex_transformer import ComplexTransformer, make_model
 from kinodata.types import NodeType
 from kinodata.data.dataset import apply_transform_instance_permament
@@ -54,8 +52,9 @@ args = parser.parse_args()
 
 project_name=f"{args.csv_folder_name}_fold_{args.fold}"
 print(f"the project name is {project_name}")
-#wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="iris_kfold_normal_wa_scale_0.2", mode="online", id="cplvjvq2", resume="must", settings=wandb.Settings(silent="false"))
-wandb.init(entity="nextaids", project="kinodata-3d_rmsd10", name=project_name, group="new_datamodule_random_wl10_wh7", mode="online", settings=wandb.Settings(silent="false"))
+
+#put user wandb setting below
+wandb.init(entity="", project="", name=project_name, group="", mode="")
 
 
 
@@ -82,14 +81,9 @@ def set_seed(seed=42):
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
-def get_safe_num_workers():
-    try:
-        return max(8, len(os.sched_getaffinity(0))) 
-    except AttributeError:
-        return min(1, os.cpu_count())
 
 
-####config
+####config --> this is the default for training but can be se
 
 configuration.register(
         "sparse_transformer",
@@ -124,37 +118,17 @@ config["k_fold"] = 5
 config["split_index"]=args.fold
 config["max_epochs"] = 500
 config["accelerator"] = "gpu"
-config["csv_save_dir"]=f"/data1/choderaj/lopezrr/kinodata-3D-affinity-prediction/kinodata/training/data_runs_test/{project_name}"
+config["csv_save_dir"]=f"path_to/{project_name}"
 set_seed(config["seed"])
-n_w=get_safe_num_workers()
-print(f"num workers from train script {n_w}")
-config["num_workers"]=n_w
+#config["num_workers"]=n_w --> can be set by the user
 
 print(f"the configuration is {config}")
-
-#if config["split_type"] == "scaffold-k-fold":
-#    from kinodata.data.data_module_scaffold.data_module import make_kinodata_module
-
-#if config["split_type"] == "random-k-fold":
-#    from kinodata.data.data_module_random.data_module import make_kinodata_module
-
-#if config["split_type"] == "pocket-k-fold":
-#    from kinodata.data.data_module_pocket.data_module import make_kinodata_module
 
 
 torch.cuda.empty_cache()
 print(torch.cuda.memory_summary())
 checkpoint_dir = f"{args.checkpoint_name}_fold_{args.fold}"
 
-#to save the model while running
-checkpoint_callback = ModelCheckpoint(
-    dirpath=checkpoint_dir,
-    filename="best_model",
-    save_top_k=1,
-    monitor="val/combined_mae",  # or "val_activity_loss", etc
-    mode="min",
-    save_last=True
-)
 
 def train(config, fn_data, fn_model=None):
     
@@ -199,7 +173,6 @@ def train(config, fn_data, fn_model=None):
 
 
     trainer.fit(model, datamodule=data_module)
-    #trainer.fit(model, datamodule=data_module, ckpt_path=f"{checkpoint_dir}/last.ckpt")
     trainer.test(ckpt_path="best", datamodule=data_module)
 
 
