@@ -8,33 +8,45 @@ Unlike structure-based models that rely only on poses below a fixed RMSD cutoff,
 
 - binding affinity, expressed as pIC50;
 - activity uncertainty;
-- pose quality, expressed as a continuous structural reliability score.
+- pose quality, expressed as a structural reliability score.
 
 The predicted pose quality is used to modulate the contribution of each structure to the activity loss, allowing the model to learn from heterogeneous structural data while giving greater importance to reliable complexes.
 
 ## Overview
 ![Schematic overview of the multi-objective model workflow](methods_detailed_fig.png)
 
+## Overview
+
 Structure-based machine learning for kinase inhibitor prediction is limited by the scarcity of experimentally resolved protein–ligand complexes. Computationally generated structures, such as docked poses, can reduce this limitation, but their usefulness depends strongly on pose quality.
 
-`mOKDDD` addresses this by combining two training objectives:
+`mOKDDD` addresses this by combining activity prediction with pose-quality estimation in a shared E(3)-invariant graph neural network.
 
-1. **Activity prediction objective**  
-   Learns binding affinity and activity uncertainty from kinase–ligand complexes with experimental activity labels.
+![Schematic overview of the multi-objective model workflow](methods_detailed_fig.png)
 
-2. **Pose-quality objective**  
-   Learns to estimate the structural reliability of generated ligand poses using RMSD-derived pose-quality labels.
+The workflow consists of four main steps:
 
-Both objectives are optimized jointly using a shared E(3)-invariant message-passing GNN and a multi-output readout.
+**(a) Dataset construction.**  
+Two complementary datasets are used during training: an activity dataset containing kinase–ligand complexes with experimental pIC50 labels, and a pose-quality dataset containing generated cross-docked kinase–ligand poses with RMSD-derived pose-quality labels.
+
+**(b) Graph construction and featurization.**  
+Each kinase–ligand complex is converted into a molecular graph. Atoms are represented as nodes, while covalent bonds and spatial contacts are represented as edges. The graph is featurized using atom-level descriptors, bond-order information, and interatomic distances.
+
+**(c) E(3)-invariant message passing.**  
+Both activity and pose-quality mini-batches are processed by the same shared E(3)-invariant message-passing GNN. This produces learned node and edge embeddings while preserving invariance to rotations and translations of the input structure.
+
+**(d) Multi-output readout and joint training.**  
+A multi-output readout predicts binding affinity, activity uncertainty, and pose quality. These outputs are optimized jointly using a multi-objective loss that combines the activity and pose-quality objectives.
+
+The activity objective learns binding affinity and uncertainty from kinase–ligand complexes with experimental activity labels, while the pose-quality objective learns to estimate the structural reliability of generated ligand poses. The predicted pose quality is then used to modulate the activity loss, allowing the model to learn from heterogeneous structural data while giving greater importance to reliable complexes.
 
 ## Model outputs
 
 For each kinase–ligand complex `x`, the model predicts:
 
 ```text
-mu(x)       predicted activity / binding affinity
-sigma(x)    predicted activity uncertainty
-q_pose(x)   predicted pose quality / structural reliability
+mu(x)         predicted activity
+sigma^2(x)   predicted activity variance
+q_pose(x)    predicted pose quality
 
 ## Installation
 
