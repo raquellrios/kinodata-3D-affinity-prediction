@@ -50,7 +50,11 @@ condor/*.err
 
 # local config files
 *_local.yaml
-
+environment_*yaml
+ligand_gin.yaml
+cg*yamls
+dev_config.yaml
+dti.yaml
 # wandb api key
 wandb_api_key
 
@@ -186,3 +190,12 @@ dmypy.json
 
 .DS_Store
 .vscode/
+
+#model files
+kinodata/model/dti.py
+kinodata/model/ligand_gin.py
+
+kinodata/scaffold_splits_check
+
+#redundant data files
+kinodata/data/data_module_*
