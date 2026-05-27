@@ -1,57 +1,62 @@
-## Kinodata-3D dataset and models
-This repository contains a [pyg](https://pytorch-geometric.readthedocs.io/en/latest/)-based interface
-to the [Kinodata-3D dataset](https://github.com/volkamerlab/kinodata-3D) and the code used to train and evaluate the models
-presented in the [Kinodata-3D publication](https://chemrxiv.org/engage/chemrxiv/article-details/658441f7e9ebbb4db96d98e8)
-![](_static/dataset_generation.png)
-##
+# Multi-objective Kinodata3D
+
+Code and data-processing utilities for **No Pose Left Behind: Integrating Activity and Structural Data with Uncertainty-Aware Multiobjective Learning for Kinase Inhibitor Prediction**.
+
+This repository contains the implementation of `mOKDDD`, a multi-objective E(3)-invariant graph neural network for kinase–ligand binding affinity prediction. The model is designed to learn from experimentally measured activity data paired with *in silico*-generated kinase–ligand complex structures of varying pose quality.
+
+Unlike structure-based models that rely only on poses below a fixed RMSD cutoff, `mOKDDD` explicitly models structural reliability. For each kinase–ligand complex, the model jointly predicts:
+
+- binding affinity, expressed as pIC50;
+- activity uncertainty;
+- pose quality, expressed as a continuous structural reliability score.
+
+The predicted pose quality is used to modulate the contribution of each structure to the activity loss, allowing the model to learn from heterogeneous structural data while giving greater importance to reliable complexes.
+
+## Overview
+![Schematic overview of the multi-objective model workflow](methods_detailed_fig.png)
+
+Structure-based machine learning for kinase inhibitor prediction is limited by the scarcity of experimentally resolved protein–ligand complexes. Computationally generated structures, such as docked poses, can reduce this limitation, but their usefulness depends strongly on pose quality.
+
+`mOKDDD` addresses this by combining two training objectives:
+
+1. **Activity prediction objective**  
+   Learns binding affinity and activity uncertainty from kinase–ligand complexes with experimental activity labels.
+
+2. **Pose-quality objective**  
+   Learns to estimate the structural reliability of generated ligand poses using RMSD-derived pose-quality labels.
+
+Both objectives are optimized jointly using a shared E(3)-invariant message-passing GNN and a multi-output readout.
+
+## Model outputs
+
+For each kinase–ligand complex `x`, the model predicts:
+
+```text
+mu(x)       predicted activity / binding affinity
+sigma(x)    predicted activity uncertainty
+q_pose(x)   predicted pose quality / structural reliability
+
 ## Installation
-We currently only support installation from source.
-### (1) Clone this repo
-### (2) Set up Python environment
-Use [mamba](https://mamba.readthedocs.io/en/latest/micromamba-installation.html#umamba-install) (or conda) to set up a Python environment,
+
+We currently support installation from source.
+
+### 1. Clone this repository
+
 ```
-mamba env create -f environment.yml
-mamba activate kinodata
+git clone https://github.com/raquellrios/multi-objective-kinodata-3D.git
+cd multi-objective-kinodata-3D
+git checkout paper_release
 ```
-and install this package in editable/develop mode
+
+### 2. Set up Python environment
+You can use mamba or conda to set up the environment
+```
+mamba env create -f kinodata_env.yml
+mamba activate kinodata_env
+```
+
+Then, install the package with
+
 ```
 pip install -e .
 ```
-### (3) Obtain raw data
-The raw data, docked poses and kinase pdb files, can be obtained [from Zenodo](https://zenodo.org/records/10410259). 
-After downloading the archives, extract them in the root directory of this repository.
-```
-cd PATH_TO_REPO
-unzip ...
-```
-See the [Kinodata-3D repo](https://github.com/volkamerlab/kinodata-3D) for more information and the code used to generate the raw data.
-
-## General usage
-- [Kinodata-3D dataset](examples/dataset.ipynb)
-- [Kinodata-3D data splits](examples/data_splits.ipynb)
-- [Coming soon: Kinodata-3D models](examples/models.ipynb)
-
-## Reproducing results
-### (1) Acquire exact dataset and data split versions
-If you intend to reproduce our results, we strongly recommend that you use [our preprocessed version of the dataset and corresponding data splits](https://zenodo.org/records/10410594).
-
-### (2) Model training and evaluation
-You can use the shell script `condor/train_generic.sh` to train and test a model in one run, on one particular split.
-Create a file `wandb_api_key` in the root directory of this repository and paste your [wandb](https://wandb.ai/) API key,
-if you want to sync results to Weight & Biases.
-Otherwise, run `wandb disable` in a terminal with the conda environment activated, before training.
-
-The script requires the following positional arguments
-1. Base python script, one of `"train_dti_baseline"`, `"train_sparse_transformer"`
-1. Split type, i.e. one of `"scaffold-k-fold"`, `"random-k-fold"`, `"pocket-k-fold"`.
-2. Integer RMSD cutoff for the dataset, e.g. 2, 4, or 6 as used in the publication.
-3. A `.yaml` file that contains additional configuration parameters, e.g. model hyperparameters.
-4. The integer index of the cross-validation fold used for testing.
-
-For instance,
-```
-./condor/train_generic.sh train_dti_baseline scaffold-k-fold 2 dti.yaml 0
-```
-trains and tests the DTI baseline on the scaffold-5-fold (default k is 5) split of the dataset
-containing all complexes with predicted RMSD <= 2 Angstroms.
-Folds 1-4 are used for training and fold 0 for testing.

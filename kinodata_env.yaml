@@ -1,4 +1,4 @@
-name: kinodata_backup
+name: kinodata_env
 channels:
   - pyg
   - pytorch
