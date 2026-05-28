@@ -70,3 +70,6 @@ Then, install the package with
 ```
 pip install -e .
 ```
+
+### 3. Obtain raw data
+The raw and processed data can be obtained [from Zenodo](https://doi.org/10.5281/zenodo.20433386). After downloading the archives, extract them in the root directory of this repository. See the Zenodo description for more details on the folder structure of the datasets.
